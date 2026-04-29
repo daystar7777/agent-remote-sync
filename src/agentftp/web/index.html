@@ -1,0 +1,722 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agentFTP</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --line: #d9dee7;
+      --text: #18202f;
+      --muted: #667085;
+      --blue: #2563eb;
+      --green: #0f766e;
+      --red: #b42318;
+      --amber: #a15c07;
+      --select: #e8f0ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      height: 56px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .meta {
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(280px, 1fr) 72px minmax(280px, 1fr);
+      gap: 12px;
+      height: calc(100vh - 112px);
+      padding: 12px;
+    }
+
+    .panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 46px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .title {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .title strong {
+      font-size: 13px;
+    }
+
+    .path {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+
+    .storage {
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    button {
+      min-height: 32px;
+      border: 1px solid #c8ced9;
+      background: #fff;
+      color: var(--text);
+      padding: 5px 9px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: #98a2b3; }
+    button.primary { border-color: var(--blue); color: var(--blue); }
+    button.danger { border-color: #f3b7b0; color: var(--red); }
+
+    .bridge {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 10px;
+    }
+
+    .bridge button {
+      width: 100%;
+      min-height: 38px;
+      font-weight: 650;
+    }
+
+    .list {
+      overflow: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th, td {
+      height: 34px;
+      padding: 0 10px;
+      border-bottom: 1px solid #eef1f5;
+      text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      background: #fbfcfe;
+    }
+
+    tr { cursor: default; }
+    tr.selected { background: var(--select); }
+    tr:hover td { background: #f8fafc; }
+    tr.selected:hover td { background: var(--select); }
+
+    .kind { width: 70px; }
+    .size { width: 100px; text-align: right; }
+    .modified { width: 150px; }
+
+    footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      height: 56px;
+      padding: 8px 14px;
+      border-top: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .status {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+    }
+
+    progress {
+      width: 220px;
+      height: 12px;
+      accent-color: var(--green);
+    }
+
+    .footer-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    dialog {
+      width: min(640px, calc(100vw - 32px));
+      border: 1px solid var(--line);
+      padding: 0;
+      color: var(--text);
+      background: #fff;
+    }
+
+    dialog::backdrop {
+      background: rgb(15 23 42 / 0.28);
+    }
+
+    .modal-head, .modal-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-foot {
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+      justify-content: flex-end;
+    }
+
+    .modal-body {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .plan-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      border: 1px solid #eef1f5;
+      padding: 8px;
+      min-width: 0;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .warning {
+      color: var(--red);
+    }
+
+    .plan-list {
+      max-height: 160px;
+      overflow: auto;
+      border: 1px solid #eef1f5;
+      padding: 8px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 820px) {
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: minmax(220px, 1fr) auto minmax(220px, 1fr);
+        height: auto;
+        min-height: calc(100vh - 112px);
+      }
+
+      .bridge {
+        flex-direction: row;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>agentFTP</h1>
+      <div class="meta" id="remote-meta"></div>
+    </div>
+    <div class="meta" id="local-meta"></div>
+  </header>
+
+  <main>
+    <section class="panel" id="remote-panel">
+      <div class="panel-head">
+        <div class="title">
+          <strong>Remote</strong>
+          <span class="path" id="remote-path">/</span>
+          <span class="storage" id="remote-storage">Free: checking...</span>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button data-action="up" data-side="remote">Up</button>
+        <button data-action="mkdir" data-side="remote">New</button>
+        <button data-action="rename" data-side="remote">Rename</button>
+        <button data-action="move" data-side="remote">Move</button>
+        <button class="danger" data-action="delete" data-side="remote">Delete</button>
+        <button data-action="refresh" data-side="remote">Refresh</button>
+      </div>
+      <div class="list" id="remote-list"></div>
+    </section>
+
+    <div class="bridge">
+      <button class="primary" id="download">&lt;-</button>
+      <button class="primary" id="upload">-&gt;</button>
+    </div>
+
+    <section class="panel" id="local-panel">
+      <div class="panel-head">
+        <div class="title">
+          <strong>Local</strong>
+          <span class="path" id="local-path">/</span>
+          <span class="storage" id="local-storage">Free: checking...</span>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button data-action="up" data-side="local">Up</button>
+        <button data-action="mkdir" data-side="local">New</button>
+        <button data-action="rename" data-side="local">Rename</button>
+        <button data-action="move" data-side="local">Move</button>
+        <button class="danger" data-action="delete" data-side="local">Delete</button>
+        <button data-action="refresh" data-side="local">Refresh</button>
+      </div>
+      <div class="list" id="local-list"></div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="status" id="status">Ready</div>
+    <div class="footer-actions">
+      <button class="danger" id="cancel-transfer" type="button" hidden>Cancel</button>
+      <progress id="progress" value="0" max="1"></progress>
+    </div>
+  </footer>
+
+  <dialog id="plan-dialog">
+    <div class="modal-head">
+      <strong id="plan-title">Transfer plan</strong>
+      <button id="plan-close" type="button">Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="plan-grid">
+        <div class="metric"><span>Items</span><strong id="plan-items">0 files</strong></div>
+        <div class="metric"><span>Total size</span><strong id="plan-total">0 B</strong></div>
+        <div class="metric"><span>Needed space</span><strong id="plan-required">0 B</strong></div>
+        <div class="metric"><span>Destination free</span><strong id="plan-free">0 B</strong></div>
+      </div>
+      <label id="plan-overwrite-row">
+        <input id="plan-overwrite" type="checkbox">
+        Overwrite conflicting files
+      </label>
+      <div class="warning" id="plan-warning"></div>
+      <div class="plan-list" id="plan-files"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="plan-cancel" type="button">Cancel</button>
+      <button class="primary" id="plan-start" type="button">Start</button>
+    </div>
+  </dialog>
+
+  <script>
+    const state = {
+      remotePath: "/",
+      localPath: "/",
+      remoteParent: "/",
+      localParent: "/",
+      selected: { remote: [], local: [] },
+      currentJobId: ""
+    };
+
+    const statusEl = document.getElementById("status");
+    const progressEl = document.getElementById("progress");
+    const cancelTransferEl = document.getElementById("cancel-transfer");
+    const planDialog = document.getElementById("plan-dialog");
+
+    async function api(url, options = {}) {
+      const response = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        ...options
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || data.error || response.statusText);
+      }
+      return data;
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function setCurrentJob(id) {
+      state.currentJobId = id || "";
+      cancelTransferEl.hidden = !state.currentJobId;
+    }
+
+    function formatBytes(value) {
+      let amount = Number(value || 0);
+      for (const suffix of ["B", "KB", "MB", "GB", "TB"]) {
+        if (amount < 1024 || suffix === "TB") {
+          return suffix === "B" ? `${amount} ${suffix}` : `${amount.toFixed(1)} ${suffix}`;
+        }
+        amount /= 1024;
+      }
+    }
+
+    function formatTime(value) {
+      if (!value) return "";
+      return new Date(value * 1000).toLocaleString();
+    }
+
+    async function load(side) {
+      const data = await api(`/api/${side}/list?path=${encodeURIComponent(state[`${side}Path`])}`);
+      state[`${side}Path`] = data.path;
+      state[`${side}Parent`] = data.parent;
+      state.selected[side] = [];
+      document.getElementById(`${side}-path`).textContent = data.path;
+      renderList(side, data.entries);
+    }
+
+    async function loadStorage(side) {
+      const data = await api(`/api/${side}/storage`);
+      document.getElementById(`${side}-storage`).textContent =
+        `Free: ${formatBytes(data.freeBytes)} / ${formatBytes(data.totalBytes)}`;
+    }
+
+    function renderList(side, entries) {
+      const host = document.getElementById(`${side}-list`);
+      const rows = entries.map((entry) => {
+        const type = entry.type === "dir" ? "dir" : entry.type;
+        const size = entry.type === "file" ? formatBytes(entry.size) : "";
+        return `<tr data-path="${escapeAttr(entry.path)}" data-type="${entry.type}">
+          <td title="${escapeAttr(entry.name)}">${escapeHtml(entry.name)}</td>
+          <td class="kind">${type}</td>
+          <td class="size">${size}</td>
+          <td class="modified">${formatTime(entry.modified)}</td>
+        </tr>`;
+      }).join("");
+      host.innerHTML = `<table>
+        <thead><tr><th>Name</th><th class="kind">Type</th><th class="size">Size</th><th class="modified">Modified</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4">Empty</td></tr>`}</tbody>
+      </table>`;
+      host.querySelectorAll("tr[data-path]").forEach((row) => {
+        row.addEventListener("click", (event) => selectRow(side, row, event));
+        row.addEventListener("dblclick", () => {
+          if (row.dataset.type === "dir") {
+            state[`${side}Path`] = row.dataset.path;
+            load(side).catch(showError);
+          }
+        });
+      });
+    }
+
+    function selectRow(side, row, event) {
+      const item = { path: row.dataset.path, type: row.dataset.type };
+      const current = state.selected[side];
+      if (event.ctrlKey || event.metaKey) {
+        const exists = current.some((entry) => entry.path === item.path);
+        state.selected[side] = exists ? current.filter((entry) => entry.path !== item.path) : [...current, item];
+      } else {
+        state.selected[side] = [item];
+      }
+      syncSelectionStyles(side);
+    }
+
+    function syncSelectionStyles(side) {
+      const selectedPaths = new Set(state.selected[side].map((entry) => entry.path));
+      document.querySelectorAll(`#${side}-list tr[data-path]`).forEach((row) => {
+        row.classList.toggle("selected", selectedPaths.has(row.dataset.path));
+      });
+    }
+
+    function selectedItems(side) {
+      return state.selected[side];
+    }
+
+    function selectedOne(side) {
+      const items = selectedItems(side);
+      return items.length === 1 ? items[0] : null;
+    }
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[ch]));
+    }
+
+    function escapeAttr(text) {
+      return escapeHtml(text);
+    }
+
+    async function runPanelAction(side, action) {
+      if (action === "refresh") {
+        await Promise.all([load(side), loadStorage(side)]);
+        return;
+      }
+      if (action === "up") {
+        state[`${side}Path`] = state[`${side}Parent`];
+        await load(side);
+        return;
+      }
+      if (action === "mkdir") {
+        const name = prompt("Folder name");
+        if (!name) return;
+        await api(`/api/${side}/mkdir`, {
+          method: "POST",
+          body: JSON.stringify({ parent: state[`${side}Path`], name })
+        });
+        await Promise.all([load(side), loadStorage(side)]);
+        return;
+      }
+      const selected = selectedItems(side);
+      if (!selected) {
+        alert(`Select a ${side} item first.`);
+        return;
+      }
+      if (action === "delete") {
+        if (!selected.length) {
+          alert(`Select a ${side} item first.`);
+          return;
+        }
+        if (!confirm(`Delete ${selected.length} selected item(s) immediately?`)) return;
+        for (const item of selected) {
+          await api(`/api/${side}/delete`, {
+            method: "POST",
+            body: JSON.stringify({ path: item.path })
+          });
+        }
+      } else if (action === "rename") {
+        const one = selectedOne(side);
+        if (!one) {
+          alert("Select exactly one item to rename.");
+          return;
+        }
+        const name = prompt("New name");
+        if (!name) return;
+        await api(`/api/${side}/rename`, {
+          method: "POST",
+          body: JSON.stringify({ path: one.path, newName: name })
+        });
+      } else if (action === "move") {
+        const one = selectedOne(side);
+        if (!one) {
+          alert("Select exactly one item to move.");
+          return;
+        }
+        const destDir = prompt("Destination folder path", state[`${side}Path`]);
+        if (!destDir) return;
+        await api(`/api/${side}/move`, {
+          method: "POST",
+          body: JSON.stringify({ path: one.path, destDir })
+        });
+      }
+      await Promise.all([load(side), loadStorage(side)]);
+    }
+
+    async function startUpload() {
+      const selected = selectedItems("local");
+      if (!selected.length) {
+        alert("Select one or more local items first.");
+        return;
+      }
+      const body = { paths: selected.map((item) => item.path), remoteDir: state.remotePath };
+      const plan = await api("/api/plan/upload", { method: "POST", body: JSON.stringify(body) });
+      const overwrite = await showPlanDialog(plan, "Upload");
+      if (overwrite === null) return;
+      const job = await api("/api/jobs/upload", {
+        method: "POST",
+        body: JSON.stringify({ planId: plan.planId, overwrite })
+      });
+      setCurrentJob(job.id);
+      pollJob(job.id);
+    }
+
+    async function startDownload() {
+      const selected = selectedItems("remote");
+      if (!selected.length) {
+        alert("Select one or more remote items first.");
+        return;
+      }
+      const body = { paths: selected.map((item) => item.path), localDir: state.localPath };
+      const plan = await api("/api/plan/download", { method: "POST", body: JSON.stringify(body) });
+      const overwrite = await showPlanDialog(plan, "Download");
+      if (overwrite === null) return;
+      const job = await api("/api/jobs/download", {
+        method: "POST",
+        body: JSON.stringify({ planId: plan.planId, overwrite })
+      });
+      setCurrentJob(job.id);
+      pollJob(job.id);
+    }
+
+    function showPlanDialog(plan, verb) {
+      return new Promise((resolve) => {
+        const conflictCount = plan.conflicts.length;
+        const warningText = plan.warnings.map((item) => item.message).join("\n");
+        document.getElementById("plan-title").textContent = `${verb} plan`;
+        document.getElementById("plan-items").textContent = `${plan.totalFiles} file(s), ${plan.totalDirs} folder(s)`;
+        document.getElementById("plan-total").textContent = formatBytes(plan.totalBytes);
+        document.getElementById("plan-required").textContent = formatBytes(plan.requiredBytes);
+        document.getElementById("plan-free").textContent = formatBytes(plan.destinationStorage.freeBytes);
+        document.getElementById("plan-warning").textContent = warningText;
+        document.getElementById("plan-files").textContent = plan.files.slice(0, 80)
+          .map((item) => `${item.source} -> ${item.target}`)
+          .join("\n") || "No files to transfer.";
+        const overwriteRow = document.getElementById("plan-overwrite-row");
+        const overwriteInput = document.getElementById("plan-overwrite");
+        const startButton = document.getElementById("plan-start");
+        overwriteRow.hidden = conflictCount === 0;
+        overwriteInput.checked = false;
+
+        const updateStartState = () => {
+          startButton.disabled = !plan.canStart || (conflictCount > 0 && !overwriteInput.checked);
+        };
+        updateStartState();
+        overwriteInput.onchange = updateStartState;
+        document.getElementById("plan-close").onclick = () => {
+          planDialog.close();
+          resolve(null);
+        };
+        document.getElementById("plan-cancel").onclick = () => {
+          planDialog.close();
+          resolve(null);
+        };
+        startButton.onclick = () => {
+          planDialog.close();
+          resolve(overwriteInput.checked);
+        };
+        planDialog.oncancel = () => resolve(null);
+        planDialog.showModal();
+      });
+    }
+
+    async function pollJob(id) {
+      const job = await api(`/api/jobs/${id}`);
+      const total = job.totalBytes || 1;
+      progressEl.max = total;
+      progressEl.value = Math.min(job.doneBytes || 0, total);
+      setStatus(`${job.state}: ${job.current || job.kind} (${formatBytes(job.doneBytes)} / ${formatBytes(job.totalBytes)})`);
+      if (job.state === "running" || job.state === "queued") {
+        setTimeout(() => pollJob(id).catch(showError), 700);
+      } else {
+        setCurrentJob("");
+        if (job.state === "error") {
+          setStatus(`error: ${job.error}`);
+        } else if (job.state === "cancelled") {
+          setStatus("transfer cancelled");
+        } else {
+          setStatus(`${job.kind} complete`);
+          await Promise.all([load("remote"), load("local"), loadStorage("remote"), loadStorage("local")]);
+        }
+      }
+    }
+
+    async function cancelCurrentJob() {
+      if (!state.currentJobId) return;
+      const id = state.currentJobId;
+      cancelTransferEl.disabled = true;
+      try {
+        await api(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+        setStatus("cancelling transfer...");
+      } finally {
+        cancelTransferEl.disabled = false;
+      }
+    }
+
+    function showError(error) {
+      console.error(error);
+      setStatus(`error: ${error.message}`);
+      alert(error.message);
+    }
+
+    document.querySelectorAll(".toolbar button").forEach((button) => {
+      button.addEventListener("click", () => {
+        runPanelAction(button.dataset.side, button.dataset.action).catch(showError);
+      });
+    });
+    document.getElementById("upload").addEventListener("click", () => startUpload().catch(showError));
+    document.getElementById("download").addEventListener("click", () => startDownload().catch(showError));
+    cancelTransferEl.addEventListener("click", () => cancelCurrentJob().catch(showError));
+
+    api("/api/bootstrap").then((data) => {
+      document.getElementById("remote-meta").textContent = data.remoteBase;
+      document.getElementById("local-meta").textContent = data.localRoot;
+      return Promise.all([load("remote"), load("local"), loadStorage("remote"), loadStorage("local")]);
+    }).catch(showError);
+  </script>
+</body>
+</html>

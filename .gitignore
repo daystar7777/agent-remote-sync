@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+.venv/
+venv/
+env/
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+AIMemory/
+.agentftp_partial/
+.agentftp_handoff/
+.agentftp_inbox/
+.agentftp/

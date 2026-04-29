@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agentftp"
+version = "0.1.0"
+description = "Agent-friendly cross-host file/folder transfer and remote handoff tool"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "agentFTP contributors" }]
+dependencies = ["cryptography>=42"]
+
+[project.urls]
+Homepage = "https://github.com/daystar7777/agentFTP"
+Repository = "https://github.com/daystar7777/agentFTP"
+Issues = "https://github.com/daystar7777/agentFTP/issues"
+
+[project.scripts]
+agentftp = "agentftp.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+agentftp = ["web/*"]
