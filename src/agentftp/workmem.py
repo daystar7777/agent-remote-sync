@@ -32,7 +32,9 @@ def require_work_mem(root: Path, *, prompt_install: bool = True) -> None:
         return
     if prompt_install and sys.stdin.isatty():
         answer = input(
-            f"agent-work-mem AIMemory is required in {root.resolve()}. Install it now? [y/N] "
+            "agentFTP pairs with the agent in this project through "
+            f"agent-work-mem AIMemory at {root.resolve() / AIMEMORY_DIR}. "
+            "Install/setup it now? [y/N] "
         ).strip().lower()
         if answer in ("y", "yes"):
             install_work_mem(root)

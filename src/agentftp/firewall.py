@@ -17,7 +17,8 @@ def maybe_open_firewall(port: int, mode: str = "ask") -> None:
             return
         answer = input(
             f"Open the local firewall for agentFTP TCP port {port}? "
-            "Only do this on a trusted network. [y/N] "
+            "Choose no for local-only testing or if your agent will handle network setup. "
+            "Only open it on a trusted network. [y/N] "
         ).strip().lower()
         if answer not in ("y", "yes"):
             print("Firewall rule not changed.")
@@ -78,4 +79,3 @@ def run_command(command: list[str]) -> None:
             "firewall_command_failed",
             detail or f"Command failed: {' '.join(command)}",
         )
-

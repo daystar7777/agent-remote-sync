@@ -33,6 +33,12 @@ agent-to-agent handoff.
 agentFTP is useful both when a human wants to move files directly and when an
 agent should handle transfer or handoff without a GUI.
 
+For agent workflows, start `agentftp slave`, `agentftp master`, and `agentftp
+worker` from the agent session that owns the project folder. Running the same
+commands in a plain terminal still works for file transfer, but agent-paired
+handoffs are clearest when the local agent starts agentFTP inside its own
+project root and AIMemory context.
+
 ### GUI Mode: User-Driven Transfer
 
 - Start the receiver as a console slave with `agentftp slave`.
@@ -61,6 +67,9 @@ the agent runtime is started in an approval/permission prompt mode, execution
 can pause on the slave host until someone approves it locally. For unattended
 handoffs, use a pre-approved worker policy only with trusted hosts, explicit
 `agentftp-run:` commands, scoped tokens, and a narrow project root.
+
+See [docs/agent-pairing.md](docs/agent-pairing.md) for the expected first-run
+prompts and an agent-friendly launch flow.
 
 ## Status
 
@@ -107,7 +116,8 @@ agentftp doctor
 
 ## Quick Start
 
-On the receiving machine, run slave mode from the folder you want to share:
+On the receiving machine, ask the local agent to run slave mode from the folder
+you want to share:
 
 ```powershell
 cd my-project
@@ -115,10 +125,14 @@ agentftp bootstrap
 agentftp slave
 ```
 
-The slave prints its local/LAN/Tailscale addresses. The default port is `7171`,
-and the current folder becomes the root. A master cannot browse outside it.
+The first run may ask to install agent-work-mem, set a pairing password, and
+decide whether to open the firewall. These are normal pairing/setup checks, not
+an error. The slave then prints its local/LAN/Tailscale addresses. The default
+port is `7171`, and the current folder becomes the root. A master cannot browse
+outside it.
 
-On the sending machine, save the connection and open the browser master UI:
+On the sending machine, ask the local agent to save the connection and open the
+browser master UI:
 
 ```powershell
 cd my-project
@@ -364,6 +378,7 @@ See [docs/transfer-state.md](docs/transfer-state.md).
 ## Documentation
 
 - [Usage scenarios](docs/usage-scenarios.md)
+- [Agent pairing](docs/agent-pairing.md)
 - [Headless handoff](docs/headless-handoff.md)
 - [Security](docs/security.md)
 - [Protocol](docs/protocol.md)

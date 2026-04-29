@@ -515,8 +515,10 @@ def run_slave(
     if password is None:
         import getpass
 
-        password = getpass.getpass("Set slave password: ")
-        confirm = getpass.getpass("Confirm password: ")
+        print("Set a pairing password for masters that connect to this slave.")
+        print("The password is not stored; reconnecting masters use a session token.")
+        password = getpass.getpass("Pairing password: ")
+        confirm = getpass.getpass("Confirm pairing password: ")
         if password != confirm:
             raise SystemExit("Passwords did not match")
     root = root.resolve()
@@ -547,6 +549,7 @@ def run_slave(
     print(f"Root:   {root}")
     print(f"Port:   {port}")
     print(f"Model:  {model_id}")
+    print("Pairing: started from this project root; handoffs are recorded in AIMemory")
     print(f"TLS:    {'enabled' if tls_files else 'off'}")
     if tls_files:
         print(f"Cert:   {tls_files.cert_file}")
