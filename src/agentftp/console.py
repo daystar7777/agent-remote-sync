@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import platform
+import shlex
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -24,12 +26,6 @@ def should_relaunch_in_console(
         is_child = os.environ.get(CONSOLE_CHILD_ENV) == "1"
     if is_child:
         return False
-    if system is None:
-        system = platform.system().lower()
-    else:
-        system = system.lower()
-    if system != "windows":
-        return False
     if mode == "auto":
         if stdin_isatty is None:
             stdin_isatty = sys.stdin.isatty()
@@ -47,15 +43,51 @@ def relaunch_in_console_if_needed(argv: list[str], *, mode: str, cwd: Path | Non
     env[CONSOLE_CHILD_ENV] = "1"
     command = [sys.executable, "-m", "agentftp", *argv]
     try:
-        subprocess.Popen(
-            command,
-            cwd=str((cwd or Path.cwd()).resolve()),
-            env=env,
-            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
-        )
+        open_console(command, cwd=(cwd or Path.cwd()).resolve(), env=env)
     except OSError as exc:
         print(f"agentFTP could not open a new console window: {exc}")
         print("Continuing in the current process.")
         return False
     print("agentFTP opened in a new console window.")
     return True
+
+
+def open_console(command: list[str], *, cwd: Path, env: dict[str, str]) -> None:
+    system = platform.system().lower()
+    if system == "windows":
+        subprocess.Popen(
+            command,
+            cwd=str(cwd),
+            env=env,
+            creationflags=getattr(subprocess, "CREATE_NEW_CONSOLE", 0),
+        )
+        return
+    if system == "darwin":
+        if not shutil.which("osascript"):
+            raise OSError("osascript is not available")
+        shell_command = "cd " + shlex.quote(str(cwd)) + " && " + " ".join(
+            shlex.quote(part) for part in command
+        )
+        escaped = shell_command.replace("\\", "\\\\").replace('"', '\\"')
+        subprocess.Popen(
+            [
+                "osascript",
+                "-e",
+                f'tell application "Terminal" to do script "{escaped}"',
+                "-e",
+                'tell application "Terminal" to activate',
+            ],
+            env=env,
+        )
+        return
+    terminal_commands = [
+        ["x-terminal-emulator", "-e", *command],
+        ["gnome-terminal", "--", *command],
+        ["konsole", "-e", *command],
+        ["xterm", "-e", *command],
+    ]
+    for candidate in terminal_commands:
+        if shutil.which(candidate[0]):
+            subprocess.Popen(candidate, cwd=str(cwd), env=env)
+            return
+    raise OSError("no supported terminal emulator was found")

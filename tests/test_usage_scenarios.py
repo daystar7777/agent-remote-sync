@@ -16,6 +16,7 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+import agentftp.master as master_module
 from agentftp.bootstrap import format_summary, run_bootstrap
 from agentftp.cleanup import cleanup_stale_partials
 from agentftp.cli import main as cli_main
@@ -1587,7 +1588,7 @@ class UsageScenarioTests(unittest.TestCase):
                 slave.shutdown()
                 slave.server_close()
 
-    def test_s50_console_relaunch_policy_prefers_visible_windows(self) -> None:
+    def test_s50_console_relaunch_policy_prefers_visible_console(self) -> None:
         self.assertTrue(
             should_relaunch_in_console(
                 "auto",
@@ -1615,11 +1616,20 @@ class UsageScenarioTests(unittest.TestCase):
                 system="windows",
             )
         )
-        self.assertFalse(
+        self.assertTrue(
             should_relaunch_in_console(
                 "auto",
                 stdin_isatty=False,
                 stdout_isatty=False,
+                is_child=False,
+                system="linux",
+            )
+        )
+        self.assertTrue(
+            should_relaunch_in_console(
+                "yes",
+                stdin_isatty=True,
+                stdout_isatty=True,
                 is_child=False,
                 system="linux",
             )
@@ -1633,6 +1643,60 @@ class UsageScenarioTests(unittest.TestCase):
                 system="windows",
             )
         )
+
+    def test_s51_master_keeps_ui_server_when_stdin_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install_work_mem(root)
+            started = threading.Event()
+            stopped = threading.Event()
+            wait_labels: list[str] = []
+
+            class FakeServer:
+                server_address = ("127.0.0.1", 7180)
+
+                def serve_forever(self) -> None:
+                    started.set()
+                    stopped.wait(1)
+
+                def shutdown(self) -> None:
+                    stopped.set()
+
+                def server_close(self) -> None:
+                    pass
+
+            class FakeClient:
+                base_url = "http://remote.example"
+
+                def __init__(self, *args, **kwargs) -> None:
+                    pass
+
+            def fake_wait_without_stdin(label: str) -> None:
+                wait_labels.append(label)
+                self.assertTrue(started.wait(1))
+                raise KeyboardInterrupt()
+
+            with (
+                patch.object(master_module, "RemoteClient", FakeClient),
+                patch.object(master_module, "bind_master_server", return_value=FakeServer()),
+                patch.object(master_module, "input_available", return_value=False),
+                patch.object(
+                    master_module,
+                    "wait_without_stdin",
+                    side_effect=fake_wait_without_stdin,
+                ),
+                patch.object(master_module.webbrowser, "open"),
+            ):
+                master_module.run_master(
+                    "127.0.0.1",
+                    7171,
+                    root,
+                    token="token",
+                    open_browser=True,
+                )
+
+            self.assertEqual(wait_labels, ["agentFTP master"])
+            self.assertTrue(stopped.is_set())
 
 
 def request_json(base: str, method: str, path: str, payload: dict | None = None) -> dict:
