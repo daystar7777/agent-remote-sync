@@ -40,6 +40,12 @@ agentftp bootstrap
 agentftp slave
 ```
 
+On Windows, if the agent launches this from a non-interactive background
+session, agentFTP opens a visible console window by default. That console is the
+real slave process. Keep it open while the master connects, and type `q` there
+to stop it. Use `--console no` only when you intentionally want the process to
+stay in the current non-interactive session.
+
 On the sending host, ask the local agent:
 
 ```text
@@ -93,6 +99,12 @@ That final waiting state is success. The slave console should remain open while
 the master connects. It prints local, LAN, and Tailscale-style addresses when
 available.
 
+If stdin closes because the process was started by a non-interactive runner,
+agentFTP no longer treats that as a stop command. It keeps the slave/master
+server alive. On Windows, the preferred path is the auto-opened visible console;
+on hosts where no console can be opened, terminate the process through the host
+process manager.
+
 If the user wants fewer prompts, have the agent run bootstrap first:
 
 ```powershell
@@ -106,6 +118,19 @@ agentftp slave --firewall no
 ```
 
 Use `--firewall yes` only when opening the port is already approved.
+
+Console behavior can be controlled explicitly:
+
+```powershell
+agentftp slave --console auto
+agentftp slave --console yes
+agentftp slave --console no
+agentftp master lab --console auto
+```
+
+`auto` is the default. It opens a visible Windows console when agentFTP detects
+that it was launched without an interactive terminal. `yes` forces that attempt.
+`no` disables console relaunch.
 
 ## Worker Approval Caveat
 

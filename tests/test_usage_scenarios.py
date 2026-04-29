@@ -20,6 +20,7 @@ from agentftp.bootstrap import format_summary, run_bootstrap
 from agentftp.cleanup import cleanup_stale_partials
 from agentftp.cli import main as cli_main
 from agentftp.common import MAX_JSON_BODY, MAX_UPLOAD_CHUNK, AgentFTPError
+from agentftp.console import should_relaunch_in_console
 from agentftp.connections import get_connection, normalize_alias
 from agentftp.firewall import maybe_open_firewall, open_firewall_port
 from agentftp.headless import handoff, pull, push, report, tell
@@ -1585,6 +1586,53 @@ class UsageScenarioTests(unittest.TestCase):
             finally:
                 slave.shutdown()
                 slave.server_close()
+
+    def test_s50_console_relaunch_policy_prefers_visible_windows(self) -> None:
+        self.assertTrue(
+            should_relaunch_in_console(
+                "auto",
+                stdin_isatty=False,
+                stdout_isatty=False,
+                is_child=False,
+                system="windows",
+            )
+        )
+        self.assertFalse(
+            should_relaunch_in_console(
+                "auto",
+                stdin_isatty=True,
+                stdout_isatty=True,
+                is_child=False,
+                system="windows",
+            )
+        )
+        self.assertFalse(
+            should_relaunch_in_console(
+                "auto",
+                stdin_isatty=False,
+                stdout_isatty=False,
+                is_child=True,
+                system="windows",
+            )
+        )
+        self.assertFalse(
+            should_relaunch_in_console(
+                "auto",
+                stdin_isatty=False,
+                stdout_isatty=False,
+                is_child=False,
+                system="linux",
+            )
+        )
+        self.assertFalse(
+            should_relaunch_in_console(
+                "no",
+                stdin_isatty=False,
+                stdout_isatty=False,
+                is_child=False,
+                system="windows",
+            )
+        )
 
 
 def request_json(base: str, method: str, path: str, payload: dict | None = None) -> dict:

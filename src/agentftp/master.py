@@ -4,6 +4,7 @@ import json
 import os
 import shutil
 import socket
+import sys
 import threading
 import time
 import webbrowser
@@ -973,17 +974,38 @@ def run_master(
         webbrowser.open(url)
     print("Commands: [q] stop")
     try:
-        while True:
-            command = input("agentftp-master> ").strip().lower()
-            if command in ("q", "quit", "exit"):
-                break
-            if command:
-                print(f"UI: {url}")
+        if not input_available():
+            wait_without_stdin("agentFTP master")
+        else:
+            while True:
+                try:
+                    command = input("agentftp-master> ").strip().lower()
+                except EOFError:
+                    wait_without_stdin("agentFTP master")
+                    break
+                if command in ("q", "quit", "exit"):
+                    break
+                if command:
+                    print(f"UI: {url}")
     except KeyboardInterrupt:
         print()
     finally:
         server.shutdown()
         server.server_close()
+
+
+def input_available() -> bool:
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def wait_without_stdin(label: str) -> None:
+    print(f"{label}: stdin is not interactive; staying alive until the process is interrupted.")
+    print("Use a visible console for [q] stop, or terminate the process from the host.")
+    while True:
+        time.sleep(3600)
 
 
 def bind_master_server(state: MasterState, start_port: int) -> AgentFTPMasterServer:

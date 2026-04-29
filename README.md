@@ -45,7 +45,12 @@ project root and AIMemory context.
 - Open the browser-based master UI with `agentftp master lab`.
 - The master browser opens automatically and shows remote files on the left,
   local files on the right.
+- On Windows, if `slave` or `master` is launched by an agent without an
+  interactive terminal, agentFTP opens a visible console window by default so it
+  can be inspected and stopped later.
 - Use `agentftp master lab --no-browser` when you only want the local UI URL.
+  Use `--console no` only when you intentionally want to keep the process in the
+  current non-interactive session.
 
 GUI mode is best when a user wants to inspect folders, select files manually,
 upload/download in either direction, and confirm conflicts visually.
@@ -127,9 +132,10 @@ agentftp slave
 
 The first run may ask to install agent-work-mem, set a pairing password, and
 decide whether to open the firewall. These are normal pairing/setup checks, not
-an error. The slave then prints its local/LAN/Tailscale addresses. The default
-port is `7171`, and the current folder becomes the root. A master cannot browse
-outside it.
+an error. If the command was launched by an agent on Windows, agentFTP should
+open a visible console window automatically. The slave then prints its
+local/LAN/Tailscale addresses. The default port is `7171`, and the current
+folder becomes the root. A master cannot browse outside it.
 
 On the sending machine, ask the local agent to save the connection and open the
 browser master UI:

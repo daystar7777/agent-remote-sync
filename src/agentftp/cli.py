@@ -11,6 +11,7 @@ from .bootstrap import format_summary, run_bootstrap
 from .cleanup import cleanup_stale_partials
 from .common import AgentFTPError
 from .common import DEFAULT_PORT, DEFAULT_UI_PORT
+from .console import relaunch_in_console_if_needed
 from .connections import get_connection, iter_connections, normalize_alias, remove_connection, set_connection
 from .headless import handoff as send_handoff
 from .headless import pull, push, report, tell
@@ -69,6 +70,12 @@ def main(argv: list[str] | None = None) -> None:
     )
     slave.add_argument("--cert-file", default="", help="certificate PEM for --tls manual")
     slave.add_argument("--key-file", default="", help="private key PEM for --tls manual")
+    slave.add_argument(
+        "--console",
+        choices=["auto", "yes", "no"],
+        default="auto",
+        help="open long-running slave mode in a visible console when possible",
+    )
 
     connect = subcommands.add_parser("connect", help="authenticate and save a connection alias")
     connect.add_argument("name", help="short name for the connection")
@@ -94,6 +101,12 @@ def main(argv: list[str] | None = None) -> None:
     master.add_argument("--password", help="slave password; omit to prompt")
     master.add_argument("--ui-port", type=int, default=DEFAULT_UI_PORT, help="local browser UI port")
     master.add_argument("--no-browser", action="store_true", help="print the UI URL without opening it")
+    master.add_argument(
+        "--console",
+        choices=["auto", "yes", "no"],
+        default="auto",
+        help="open long-running master mode in a visible console when possible",
+    )
     add_tls_client_args(master)
 
     push_parser = subcommands.add_parser("push", help="headless upload to a slave")
@@ -226,7 +239,11 @@ def main(argv: list[str] | None = None) -> None:
 
     subcommands.add_parser("doctor", help="check local runtime")
 
-    args = parser.parse_args(argv)
+    effective_argv = list(argv) if argv is not None else sys.argv[1:]
+    args = parser.parse_args(effective_argv)
+    if args.command in ("slave", "master"):
+        if relaunch_in_console_if_needed(effective_argv, mode=args.console):
+            return
     try:
         if args.command == "doctor":
             doctor()

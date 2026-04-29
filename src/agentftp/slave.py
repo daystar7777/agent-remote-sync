@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -563,28 +564,49 @@ def run_slave(
     state.log("slave started")
 
     try:
-        while True:
-            command = input("agentftp-slave> ").strip().lower()
-            if command in ("q", "quit", "exit"):
-                break
-            if command in ("i", "info"):
-                print(f"Root: {root}")
-                if tls_files:
-                    print(f"TLS fingerprint: {format_fingerprint(tls_files.fingerprint)}")
-                for label, address in detect_addresses(port):
-                    print(f"{label}: {scheme}://{address}")
-            elif command in ("l", "log", "logs"):
-                with state.lock:
-                    for line in state.logs[-25:]:
-                        print(line)
-            elif command:
-                print("Commands: [i] info  [l] logs  [q] stop")
+        if not input_available():
+            wait_without_stdin("agentFTP slave")
+        else:
+            while True:
+                try:
+                    command = input("agentftp-slave> ").strip().lower()
+                except EOFError:
+                    wait_without_stdin("agentFTP slave")
+                    break
+                if command in ("q", "quit", "exit"):
+                    break
+                if command in ("i", "info"):
+                    print(f"Root: {root}")
+                    if tls_files:
+                        print(f"TLS fingerprint: {format_fingerprint(tls_files.fingerprint)}")
+                    for label, address in detect_addresses(port):
+                        print(f"{label}: {scheme}://{address}")
+                elif command in ("l", "log", "logs"):
+                    with state.lock:
+                        for line in state.logs[-25:]:
+                            print(line)
+                elif command:
+                    print("Commands: [i] info  [l] logs  [q] stop")
     except KeyboardInterrupt:
         print()
     finally:
         state.log("stopping slave")
         server.shutdown()
         server.server_close()
+
+
+def input_available() -> bool:
+    try:
+        return sys.stdin.isatty()
+    except Exception:
+        return False
+
+
+def wait_without_stdin(label: str) -> None:
+    print(f"{label}: stdin is not interactive; staying alive until the process is interrupted.")
+    print("Use a visible console for [q] stop, or terminate the process from the host.")
+    while True:
+        time.sleep(3600)
 
 
 def prepare_tls(
