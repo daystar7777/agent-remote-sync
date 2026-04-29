@@ -176,12 +176,21 @@ Run with approval:
 agentftp worker --once --execute ask
 ```
 
+The approval prompt appears on the receiver/slave console. The master cannot
+answer it remotely. This is useful when a human is supervising the receiver, but
+it can make a headless handoff appear stuck if nobody is watching that host.
+
 Run non-interactively only when the receiver already trusts the sender and the
 handoff:
 
 ```powershell
 agentftp worker --once --execute yes
 ```
+
+For unattended workers, combine non-interactive execution with a narrow project
+root, scoped tokens, explicit `agentftp-run:` commands, and a trusted network or
+TLS. If the underlying agent runtime has its own permission prompts, configure
+those prompts on the slave host before expecting automatic remote execution.
 
 Reports are generated as local `STATUS_REPORT` AICP handoffs. To have the
 receiver send a report back automatically, the sender includes a callback alias

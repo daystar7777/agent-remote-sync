@@ -56,6 +56,12 @@ Headless mode is the automation path: an agent can move a project folder, hand
 off task intent, wait for remote work, and receive a report without opening the
 browser UI.
 
+**Important:** the slave itself is a console process. If the remote worker or
+the agent runtime is started in an approval/permission prompt mode, execution
+can pause on the slave host until someone approves it locally. For unattended
+handoffs, use a pre-approved worker policy only with trusted hosts, explicit
+`agentftp-run:` commands, scoped tokens, and a narrow project root.
+
 ## Status
 
 agentFTP is an early `v0.1` prototype. The core transfer and handoff flows are
@@ -295,6 +301,10 @@ Worker mode only executes commands that are explicitly written as
 `agentftp-run: <command>` lines, and only when `--execute ask` or
 `--execute yes` is supplied. Without `--once`, the worker polls continuously for
 eligible `autoRun` handoffs.
+
+When using `--execute ask`, the approval prompt appears on the slave/worker
+host, not on the master. This is safer for manual supervision, but it can make a
+remote handoff wait indefinitely if nobody is watching that console.
 
 ## Saved Host Aliases
 

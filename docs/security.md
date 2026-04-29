@@ -109,6 +109,18 @@ required before destructive operations. Delete is immediate and does not move to
 trash. A token without `delete` cannot call delete endpoints even when the
 password was valid at login time.
 
+## Approval Prompts On The Slave
+
+The slave is a console process, and worker execution happens on the receiver
+host. If `agentftp worker --execute ask` is used, or if the underlying agent
+runtime is configured to ask for filesystem/shell/network permission, execution
+waits on that slave console. The master cannot approve that prompt remotely.
+
+This is intentional for supervised receivers, but it is a common source of
+"stuck" headless handoffs. For unattended operation, configure the slave-side
+agent policy deliberately, keep the project root narrow, use scoped tokens, and
+run only explicit `agentftp-run:` commands from trusted senders.
+
 ## Partial Files
 
 Incomplete uploads are stored in `.agentftp_partial`. This folder is reserved by
