@@ -12,7 +12,10 @@ VALID_FORMS = {"NFC", "NFD", "NFKC", "NFKD", "preserve"}
 
 
 def default_disk_form() -> str:
-    value = os.environ.get("AGENTFTP_FILENAME_NORMALIZATION", DEFAULT_WIRE_FORM)
+    value = os.environ.get(
+        "AGENT_REMOTE_SYNC_FILENAME_NORMALIZATION",
+        os.environ.get("AGENT_REMOTE_SYNC_FILENAME_NORMALIZATION", DEFAULT_WIRE_FORM),
+    )
     value = value.upper() if value.lower() != "preserve" else "preserve"
     return value if value in VALID_FORMS else DEFAULT_WIRE_FORM
 

@@ -32,15 +32,20 @@ CHUNK_SIZE = 8 * 1024 * 1024
 MAX_JSON_BODY = 1024 * 1024
 MAX_UPLOAD_CHUNK = CHUNK_SIZE
 MAX_DOWNLOAD_CHUNK = CHUNK_SIZE
-PARTIAL_DIR_NAME = ".agentftp_partial"
-INBOX_DIR_NAME = ".agentftp_inbox"
-HANDOFF_DIR_NAME = ".agentftp_handoff"
-STATE_DIR_NAME = ".agentftp"
-RESERVED_DIR_NAMES = {PARTIAL_DIR_NAME, INBOX_DIR_NAME, HANDOFF_DIR_NAME, STATE_DIR_NAME}
+PARTIAL_DIR_NAME = ".agent_remote_sync_partial"
+INBOX_DIR_NAME = ".agent_remote_sync_inbox"
+HANDOFF_DIR_NAME = ".agent_remote_sync_handoff"
+STATE_DIR_NAME = ".agent_remote_sync"
+RESERVED_DIR_NAMES = {
+    PARTIAL_DIR_NAME,
+    INBOX_DIR_NAME,
+    HANDOFF_DIR_NAME,
+    STATE_DIR_NAME,
+}
 AUTH_ITERATIONS = 200_000
 
 
-class AgentFTPError(Exception):
+class AgentRemoteSyncError(Exception):
     def __init__(
         self,
         status: int,
@@ -70,6 +75,12 @@ class TransferJob:
     cancel_requested: bool = False
 
     def as_dict(self) -> dict[str, Any]:
+        now = time.time()
+        elapsed = max(0.0, (self.finished_at or now) - self.started_at)
+        bytes_per_second = self.done_bytes / elapsed if elapsed > 0 else 0.0
+        remaining = max(0, self.total_bytes - self.done_bytes)
+        eta_seconds = remaining / bytes_per_second if bytes_per_second > 0 and self.state == "running" else None
+        percent = (self.done_bytes / self.total_bytes) * 100 if self.total_bytes > 0 else 0.0
         return {
             "id": self.id,
             "kind": self.kind,
@@ -81,11 +92,15 @@ class TransferJob:
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
             "cancelRequested": self.cancel_requested,
+            "elapsedSeconds": elapsed,
+            "bytesPerSecond": bytes_per_second,
+            "etaSeconds": eta_seconds,
+            "percent": min(100.0, percent),
         }
 
     def raise_if_cancelled(self) -> None:
         if self.cancel_requested:
-            raise AgentFTPError(499, "cancelled", "Transfer was cancelled")
+            raise AgentRemoteSyncError(499, "cancelled", "Transfer was cancelled")
 
 
 def make_token() -> str:
@@ -127,19 +142,19 @@ def read_json_body(handler: Any) -> dict[str, Any]:
     try:
         length = int(raw_length)
     except ValueError as exc:
-        raise AgentFTPError(400, "bad_content_length", "Invalid Content-Length") from exc
+        raise AgentRemoteSyncError(400, "bad_content_length", "Invalid Content-Length") from exc
     if length <= 0:
         return {}
     if length > MAX_JSON_BODY:
         drain_request_body(handler, length, MAX_JSON_BODY + 1)
-        raise AgentFTPError(413, "json_too_large", "JSON request body is too large")
+        raise AgentRemoteSyncError(413, "json_too_large", "JSON request body is too large")
     data = handler.rfile.read(length)
     try:
         payload = json.loads(data.decode("utf-8"))
     except json.JSONDecodeError as exc:
-        raise AgentFTPError(400, "bad_json", "Request body must be valid JSON") from exc
+        raise AgentRemoteSyncError(400, "bad_json", "Request body must be valid JSON") from exc
     if not isinstance(payload, dict):
-        raise AgentFTPError(400, "bad_json", "Request body must be a JSON object")
+        raise AgentRemoteSyncError(400, "bad_json", "Request body must be a JSON object")
     return payload
 
 
@@ -164,7 +179,7 @@ def send_json(handler: Any, status: int, payload: dict[str, Any]) -> None:
 def send_error(handler: Any, exc: Exception) -> None:
     if isinstance(exc, OSError):
         exc = storage_error(exc)
-    if isinstance(exc, AgentFTPError):
+    if isinstance(exc, AgentRemoteSyncError):
         send_json(handler, exc.status, {"error": exc.code, "message": exc.message})
         return
     send_json(handler, 500, {"error": "internal_error", "message": str(exc)})
@@ -187,21 +202,21 @@ def console_print(*values: object, sep: str = " ", end: str = "\n", file: Any | 
     print(text, end=end, file=target)
 
 
-def storage_error(exc: OSError, action: str = "file operation") -> AgentFTPError:
+def storage_error(exc: OSError, action: str = "file operation") -> AgentRemoteSyncError:
     code = getattr(exc, "errno", None)
     if code == errno.ENOSPC:
-        return AgentFTPError(507, "insufficient_storage", f"{action} failed because disk space is exhausted")
+        return AgentRemoteSyncError(507, "insufficient_storage", f"{action} failed because disk space is exhausted")
     if code in (errno.EACCES, errno.EPERM):
-        return AgentFTPError(403, "permission_denied", f"{action} failed because permission was denied")
+        return AgentRemoteSyncError(403, "permission_denied", f"{action} failed because permission was denied")
     if hasattr(errno, "EROFS") and code == errno.EROFS:
-        return AgentFTPError(403, "read_only_filesystem", f"{action} failed because the filesystem is read-only")
+        return AgentRemoteSyncError(403, "read_only_filesystem", f"{action} failed because the filesystem is read-only")
     if code == errno.ENAMETOOLONG:
-        return AgentFTPError(400, "name_too_long", f"{action} failed because a filename is too long")
+        return AgentRemoteSyncError(400, "name_too_long", f"{action} failed because a filename is too long")
     if code == errno.ENOTDIR:
-        return AgentFTPError(400, "not_directory", f"{action} failed because a path segment is not a directory")
+        return AgentRemoteSyncError(400, "not_directory", f"{action} failed because a path segment is not a directory")
     if code in (errno.EMFILE, errno.ENFILE):
-        return AgentFTPError(503, "file_resource_exhausted", f"{action} failed because file handles are exhausted")
-    return AgentFTPError(500, "storage_error", f"{action} failed: {exc}")
+        return AgentRemoteSyncError(503, "file_resource_exhausted", f"{action} failed because file handles are exhausted")
+    return AgentRemoteSyncError(500, "storage_error", f"{action} failed: {exc}")
 
 
 def clean_rel_path(path_text: str | None, *, allow_reserved: bool = False) -> str:
@@ -209,21 +224,21 @@ def clean_rel_path(path_text: str | None, *, allow_reserved: bool = False) -> st
         path_text = "/"
     text = str(path_text).replace("\\", "/")
     if "\x00" in text:
-        raise AgentFTPError(400, "bad_path", "Path contains a null byte")
+        raise AgentRemoteSyncError(400, "bad_path", "Path contains a null byte")
     pure = PurePosixPath("/" + text.lstrip("/"))
     parts: list[str] = []
     for part in pure.parts:
         if part in ("", "/", "."):
             continue
         if part == "..":
-            raise AgentFTPError(400, "bad_path", "Path traversal is not allowed")
+            raise AgentRemoteSyncError(400, "bad_path", "Path traversal is not allowed")
         if ":" in part:
-            raise AgentFTPError(400, "bad_path", "Drive-style paths are not allowed")
+            raise AgentRemoteSyncError(400, "bad_path", "Drive-style paths are not allowed")
         part = normalize_wire(part)
         if contains_control(part):
-            raise AgentFTPError(400, "bad_path", "Control characters are not allowed in paths")
+            raise AgentRemoteSyncError(400, "bad_path", "Control characters are not allowed in paths")
         if not allow_reserved and part in RESERVED_DIR_NAMES:
-            raise AgentFTPError(400, "reserved_path", "agentFTP partial state is reserved")
+            raise AgentRemoteSyncError(400, "reserved_path", "agent-remote-sync partial state is reserved")
         parts.append(part)
     return "/" + "/".join(parts)
 
@@ -240,13 +255,13 @@ def join_rel(base: str, *names: str) -> str:
 def safe_name(name: str) -> str:
     name = normalize_wire(name)
     if not name or name in (".", ".."):
-        raise AgentFTPError(400, "bad_name", "Name is not valid")
+        raise AgentRemoteSyncError(400, "bad_name", "Name is not valid")
     if "/" in name or "\\" in name or "\x00" in name or ":" in name:
-        raise AgentFTPError(400, "bad_name", "Name must be a single path segment")
+        raise AgentRemoteSyncError(400, "bad_name", "Name must be a single path segment")
     if contains_control(name):
-        raise AgentFTPError(400, "bad_name", "Control characters are not allowed in names")
+        raise AgentRemoteSyncError(400, "bad_name", "Control characters are not allowed in names")
     if name in RESERVED_DIR_NAMES:
-        raise AgentFTPError(400, "reserved_name", "Name is reserved by agentFTP")
+        raise AgentRemoteSyncError(400, "reserved_name", "Name is reserved by agent-remote-sync")
     return name
 
 
@@ -254,7 +269,7 @@ def ensure_inside(root: Path, resolved: Path) -> None:
     try:
         resolved.relative_to(root)
     except ValueError as exc:
-        raise AgentFTPError(403, "path_escape", "Path escapes the configured root") from exc
+        raise AgentRemoteSyncError(403, "path_escape", "Path escapes the configured root") from exc
 
 
 def resolve_path(root: Path, path_text: str | None, *, allow_missing: bool = False) -> Path:
@@ -291,7 +306,7 @@ def match_child_by_normalization(parent: Path, segment: str) -> Path | None:
     except FileNotFoundError:
         return None
     if len(matches) > 1:
-        raise AgentFTPError(
+        raise AgentRemoteSyncError(
             409,
             "ambiguous_filename_normalization",
             "Multiple filenames differ only by Unicode normalization",
@@ -342,7 +357,7 @@ def file_info(root: Path, path: Path) -> dict[str, Any]:
 def list_dir(root: Path, path_text: str | None) -> dict[str, Any]:
     path = resolve_path(root, path_text)
     if not path.is_dir():
-        raise AgentFTPError(400, "not_directory", "Path is not a directory")
+        raise AgentRemoteSyncError(400, "not_directory", "Path is not a directory")
     entries = []
     for child in sorted(
         path.iterdir(), key=lambda item: (not item.is_dir(), filename_key(item.name).lower())
@@ -462,7 +477,7 @@ def ensure_storage_available(storage: dict[str, Any], required_bytes: int, desti
         return
     free = int(storage.get("freeBytes", 0))
     if required_bytes > free:
-        raise AgentFTPError(
+        raise AgentRemoteSyncError(
             507,
             "insufficient_storage",
             (

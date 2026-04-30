@@ -15,7 +15,7 @@ from .common import (
     AUTH_ITERATIONS,
     CHUNK_SIZE,
     DEFAULT_PORT,
-    AgentFTPError,
+    AgentRemoteSyncError,
     MAX_DOWNLOAD_CHUNK,
     MAX_UPLOAD_CHUNK,
     b64,
@@ -45,6 +45,7 @@ from .firewall import maybe_open_firewall
 from .filenames import filename_policy
 from .filenames import normalize_disk
 from .inbox import create_instruction
+from .registry import mark_instance_stopped, register_instance, start_heartbeat
 from .security import SecurityConfig, SecurityState
 from .tls import TLSFiles, certificate_fingerprint, ensure_self_signed_cert, format_fingerprint, wrap_server_socket
 
@@ -58,7 +59,7 @@ class SlaveState:
         self,
         root: Path,
         password: str,
-        model_id: str = "agentftp-slave",
+        model_id: str = "agent-remote-sync-slave",
         security_config: SecurityConfig | None = None,
         quiet: bool = True,
     ):
@@ -105,12 +106,12 @@ class SlaveState:
         with self.lock:
             expires = self.nonces.pop(nonce, 0)
         if expires < now:
-            raise AgentFTPError(401, "bad_nonce", "Challenge expired or unknown")
+            raise AgentRemoteSyncError(401, "bad_nonce", "Challenge expired or unknown")
         expected = make_proof(self.password_key, nonce)
         if not constant_time_equal(expected, proof):
             self.log(f"Rejected login from {client}")
             self.security.note_login_failure(client)
-            raise AgentFTPError(401, "bad_password", "Password proof rejected")
+            raise AgentRemoteSyncError(401, "bad_password", "Password proof rejected")
         token = make_token()
         granted_scopes = normalize_session_scopes(scopes)
         with self.lock:
@@ -123,7 +124,7 @@ class SlaveState:
 
     def require_token(self, header_value: str | None, scope: str | None = None) -> None:
         if not header_value or not header_value.startswith("Bearer "):
-            raise AgentFTPError(401, "missing_token", "Missing bearer token")
+            raise AgentRemoteSyncError(401, "missing_token", "Missing bearer token")
         token = header_value.removeprefix("Bearer ").strip()
         now = time.time()
         with self.lock:
@@ -131,13 +132,13 @@ class SlaveState:
             if session and float(session.get("expires", 0)) >= now:
                 granted = set(session.get("scopes", DEFAULT_SESSION_SCOPES))
                 if scope and scope not in granted:
-                    raise AgentFTPError(403, "scope_denied", f"Session does not allow {scope} operations")
+                    raise AgentRemoteSyncError(403, "scope_denied", f"Session does not allow {scope} operations")
                 session["expires"] = now + 12 * 60 * 60
                 return
-        raise AgentFTPError(401, "bad_token", "Session token is invalid or expired")
+        raise AgentRemoteSyncError(401, "bad_token", "Session token is invalid or expired")
 
 
-class AgentFTPSlaveServer(ThreadingHTTPServer):
+class AgentRemoteSyncSlaveServer(ThreadingHTTPServer):
     def __init__(self, server_address: tuple[str, int], state: SlaveState):
         super().__init__(server_address, SlaveHandler)
         self.state = state
@@ -146,7 +147,7 @@ class AgentFTPSlaveServer(ThreadingHTTPServer):
 
 
 class SlaveHandler(BaseHTTPRequestHandler):
-    server: AgentFTPSlaveServer
+    server: AgentRemoteSyncSlaveServer
 
     def setup(self) -> None:
         super().setup()
@@ -157,7 +158,7 @@ class SlaveHandler(BaseHTTPRequestHandler):
         acquired = self.server.state.security.acquire_request()
         if not acquired:
             self.server.state.security.note_overload(ip)
-            send_error(self, AgentFTPError(503, "server_busy", "Server is busy"))
+            send_error(self, AgentRemoteSyncError(503, "server_busy", "Server is busy"))
             return
         try:
             try:
@@ -200,7 +201,7 @@ class SlaveHandler(BaseHTTPRequestHandler):
             elif parsed.path == "/api/download":
                 self.handle_download(query)
             else:
-                raise AgentFTPError(404, "not_found", "Endpoint not found")
+                raise AgentRemoteSyncError(404, "not_found", "Endpoint not found")
         except Exception as exc:
             send_error(self, exc)
 
@@ -255,7 +256,7 @@ class SlaveHandler(BaseHTTPRequestHandler):
                 self.server.state.require_token(self.headers.get("Authorization"), "handoff")
                 self.handle_instruction(read_json_body(self))
             else:
-                raise AgentFTPError(404, "not_found", "Endpoint not found")
+                raise AgentRemoteSyncError(404, "not_found", "Endpoint not found")
         except Exception as exc:
             send_error(self, exc)
 
@@ -270,7 +271,7 @@ class SlaveHandler(BaseHTTPRequestHandler):
             if parsed.path == "/api/upload/chunk":
                 self.handle_upload_chunk(query)
             else:
-                raise AgentFTPError(404, "not_found", "Endpoint not found")
+                raise AgentRemoteSyncError(404, "not_found", "Endpoint not found")
         except Exception as exc:
             send_error(self, exc)
 
@@ -286,14 +287,14 @@ class SlaveHandler(BaseHTTPRequestHandler):
     def handle_download(self, query: dict[str, list[str]]) -> None:
         target = resolve_path(self.server.state.root, first(query, "path", "/"))
         if not target.is_file():
-            raise AgentFTPError(400, "not_file", "Only files can be downloaded")
+            raise AgentRemoteSyncError(400, "not_file", "Only files can be downloaded")
         size = target.stat().st_size
         offset = parse_int(first(query, "offset", "0"), "offset")
         length = parse_int(first(query, "length", str(size)), "length")
         if length > MAX_DOWNLOAD_CHUNK:
-            raise AgentFTPError(413, "download_chunk_too_large", "Download chunk is too large")
+            raise AgentRemoteSyncError(413, "download_chunk_too_large", "Download chunk is too large")
         if offset < 0 or length < 0 or offset > size:
-            raise AgentFTPError(416, "bad_range", "Requested byte range is invalid")
+            raise AgentRemoteSyncError(416, "bad_range", "Requested byte range is invalid")
         length = min(length, size - offset)
         with target.open("rb") as handle:
             handle.seek(offset)
@@ -301,8 +302,8 @@ class SlaveHandler(BaseHTTPRequestHandler):
         self.send_response(206)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("X-AgentFTP-Size", str(size))
-        self.send_header("X-AgentFTP-Mtime", str(target.stat().st_mtime))
+        self.send_header("X-Agent-Remote-Sync-Size", str(size))
+        self.send_header("X-Agent-Remote-Sync-Mtime", str(target.stat().st_mtime))
         self.end_headers()
         self.wfile.write(data)
 
@@ -313,7 +314,7 @@ class SlaveHandler(BaseHTTPRequestHandler):
             parent = resolve_path(self.server.state.root, str(payload.get("parent", "/")))
             target = parent / normalize_disk(safe_name(str(payload.get("name", ""))))
         if target.exists() and not target.is_dir():
-            raise AgentFTPError(409, "exists", "A non-directory already exists there")
+            raise AgentRemoteSyncError(409, "exists", "A non-directory already exists there")
         target.mkdir(parents=True, exist_ok=True)
         self.server.state.log(f"mkdir {clean_rel_path(str(payload.get('path') or target.name))}")
         send_json(self, 200, {"ok": True, "entry": file_info(self.server.state.root, target)})
@@ -321,7 +322,7 @@ class SlaveHandler(BaseHTTPRequestHandler):
     def handle_delete(self, payload: dict[str, Any]) -> None:
         path_text = str(payload.get("path", ""))
         if clean_rel_path(path_text) == "/":
-            raise AgentFTPError(400, "root_delete", "The root folder cannot be deleted")
+            raise AgentRemoteSyncError(400, "root_delete", "The root folder cannot be deleted")
         target = resolve_path(self.server.state.root, path_text)
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
@@ -333,12 +334,12 @@ class SlaveHandler(BaseHTTPRequestHandler):
     def handle_rename(self, payload: dict[str, Any]) -> None:
         path_text = str(payload.get("path", ""))
         if clean_rel_path(path_text) == "/":
-            raise AgentFTPError(400, "root_rename", "The root folder cannot be renamed")
+            raise AgentRemoteSyncError(400, "root_rename", "The root folder cannot be renamed")
         target = resolve_path(self.server.state.root, path_text)
         new_name = normalize_disk(safe_name(str(payload.get("newName", ""))))
         destination = target.with_name(new_name)
         if destination.exists():
-            raise AgentFTPError(409, "exists", "Destination already exists")
+            raise AgentRemoteSyncError(409, "exists", "Destination already exists")
         target.rename(destination)
         self.server.state.log(f"rename {path_text} -> {new_name}")
         send_json(self, 200, {"ok": True, "entry": file_info(self.server.state.root, destination)})
@@ -346,14 +347,14 @@ class SlaveHandler(BaseHTTPRequestHandler):
     def handle_move(self, payload: dict[str, Any]) -> None:
         path_text = str(payload.get("path", ""))
         if clean_rel_path(path_text) == "/":
-            raise AgentFTPError(400, "root_move", "The root folder cannot be moved")
+            raise AgentRemoteSyncError(400, "root_move", "The root folder cannot be moved")
         target = resolve_path(self.server.state.root, path_text)
         destination_dir = resolve_path(self.server.state.root, str(payload.get("destDir", "/")))
         if not destination_dir.is_dir():
-            raise AgentFTPError(400, "not_directory", "Destination is not a directory")
+            raise AgentRemoteSyncError(400, "not_directory", "Destination is not a directory")
         destination = destination_dir / target.name
         if destination.exists():
-            raise AgentFTPError(409, "exists", "Destination already exists")
+            raise AgentRemoteSyncError(409, "exists", "Destination already exists")
         shutil.move(str(target), str(destination))
         self.server.state.log(f"move {path_text} -> {payload.get('destDir', '/')}")
         send_json(self, 200, {"ok": True, "entry": file_info(self.server.state.root, destination)})
@@ -383,7 +384,7 @@ class SlaveHandler(BaseHTTPRequestHandler):
         target = resolve_path(self.server.state.root, path_text, allow_missing=True)
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() and not overwrite:
-            raise AgentFTPError(409, "exists", "Target exists and overwrite was not confirmed")
+            raise AgentRemoteSyncError(409, "exists", "Target exists and overwrite was not confirmed")
         part, meta = partial_paths(self.server.state.root, path_text)
         current = part.stat().st_size if part.exists() else 0
         if current != offset:
@@ -391,18 +392,18 @@ class SlaveHandler(BaseHTTPRequestHandler):
             return
         length = parse_int(self.headers.get("Content-Length", "0"), "Content-Length")
         if length <= 0:
-            raise AgentFTPError(400, "empty_chunk", "Upload chunk is empty")
+            raise AgentRemoteSyncError(400, "empty_chunk", "Upload chunk is empty")
         if length > MAX_UPLOAD_CHUNK:
             drain_request_body(self, length, MAX_UPLOAD_CHUNK + 1)
-            raise AgentFTPError(413, "upload_chunk_too_large", "Upload chunk is too large")
+            raise AgentRemoteSyncError(413, "upload_chunk_too_large", "Upload chunk is too large")
         if offset + length > total:
-            raise AgentFTPError(400, "too_much_data", "Chunk exceeds declared file size")
+            raise AgentRemoteSyncError(400, "too_much_data", "Chunk exceeds declared file size")
         with part.open("ab") as handle:
             remaining = length
             while remaining:
                 chunk = self.rfile.read(min(1024 * 1024, remaining))
                 if not chunk:
-                    raise AgentFTPError(400, "short_read", "Request body ended early")
+                    raise AgentRemoteSyncError(400, "short_read", "Request body ended early")
                 handle.write(chunk)
                 remaining -= len(chunk)
         meta.write_text(
@@ -424,13 +425,13 @@ class SlaveHandler(BaseHTTPRequestHandler):
                 if not expected_hash or sha256_file(target) == expected_hash:
                     send_json(self, 200, {"ok": True, "entry": file_info(self.server.state.root, target)})
                     return
-            raise AgentFTPError(400, "missing_partial", "No partial upload exists")
+            raise AgentRemoteSyncError(400, "missing_partial", "No partial upload exists")
         if part.stat().st_size != size:
-            raise AgentFTPError(400, "size_mismatch", "Partial upload size is incomplete")
+            raise AgentRemoteSyncError(400, "size_mismatch", "Partial upload size is incomplete")
         if expected_hash and sha256_file(part) != expected_hash:
-            raise AgentFTPError(400, "hash_mismatch", "Uploaded file hash did not match")
+            raise AgentRemoteSyncError(400, "hash_mismatch", "Uploaded file hash did not match")
         if target.exists() and not overwrite:
-            raise AgentFTPError(409, "exists", "Target exists and overwrite was not confirmed")
+            raise AgentRemoteSyncError(409, "exists", "Target exists and overwrite was not confirmed")
         target.parent.mkdir(parents=True, exist_ok=True)
         os.replace(part, target)
         if meta.exists():
@@ -443,7 +444,7 @@ class SlaveHandler(BaseHTTPRequestHandler):
     def handle_instruction(self, payload: dict[str, Any]) -> None:
         task = str(payload.get("task", "")).strip()
         if not task:
-            raise AgentFTPError(400, "missing_task", "Instruction task is required")
+            raise AgentRemoteSyncError(400, "missing_task", "Instruction task is required")
         raw_paths = payload.get("paths", [])
         paths = [clean_rel_path(str(path)) for path in raw_paths] if isinstance(raw_paths, list) else []
         manifest = create_instruction(
@@ -473,13 +474,13 @@ def normalize_session_scopes(scopes: list[str] | str | None) -> list[str]:
     elif isinstance(scopes, list):
         raw_items = [str(item).strip() for item in scopes]
     else:
-        raise AgentFTPError(400, "bad_scopes", "Session scopes must be a list or comma-separated string")
+        raise AgentRemoteSyncError(400, "bad_scopes", "Session scopes must be a list or comma-separated string")
     requested = {item for item in raw_items if item}
     if "all" in requested:
         return list(DEFAULT_SESSION_SCOPES)
     unknown = sorted(requested - SESSION_SCOPES)
     if unknown:
-        raise AgentFTPError(400, "bad_scopes", f"Unknown session scope: {', '.join(unknown)}")
+        raise AgentRemoteSyncError(400, "bad_scopes", f"Unknown session scope: {', '.join(unknown)}")
     if not requested:
         return list(DEFAULT_SESSION_SCOPES)
     return sorted(requested)
@@ -496,7 +497,7 @@ def parse_int(value: str | None, label: str) -> int:
     try:
         return int(value or "0")
     except ValueError as exc:
-        raise AgentFTPError(400, "bad_number", f"{label} must be an integer") from exc
+        raise AgentRemoteSyncError(400, "bad_number", f"{label} must be an integer") from exc
 
 
 def run_slave(
@@ -504,7 +505,7 @@ def run_slave(
     port: int = DEFAULT_PORT,
     password: str | None = None,
     host: str = "0.0.0.0",
-    model_id: str = "agentftp-slave",
+    model_id: str = "agent-remote-sync-slave",
     firewall: str = "ask",
     max_concurrent: int = 32,
     panic_on_flood: bool = False,
@@ -536,16 +537,26 @@ def run_slave(
             panic_on_flood=panic_on_flood,
         ),
     )
-    server = AgentFTPSlaveServer((host, port), state)
+    server = AgentRemoteSyncSlaveServer((host, port), state)
     if tls_files:
         wrap_server_socket(server, tls_files.cert_file, tls_files.key_file)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     scheme = "https" if tls_files else "http"
+    instance = register_instance(
+        "slave",
+        root=root,
+        port=port,
+        url=f"{scheme}://127.0.0.1:{port}",
+        host=host,
+        name=f"slave {root.name or root}",
+        extra={"modelId": model_id, "tls": bool(tls_files)},
+    )
+    heartbeat = start_heartbeat(instance["id"])
 
     print()
-    print("agentFTP Slave")
-    print("==============")
+    print("agent-remote-sync Slave")
+    print("=======================")
     print(f"Status: running")
     print(f"Root:   {root}")
     print(f"Port:   {port}")
@@ -565,13 +576,13 @@ def run_slave(
 
     try:
         if not input_available():
-            wait_without_stdin("agentFTP slave")
+            wait_without_stdin("agent-remote-sync slave")
         else:
             while True:
                 try:
-                    command = input("agentftp-slave> ").strip().lower()
+                    command = input("agent-remote-sync-slave> ").strip().lower()
                 except EOFError:
-                    wait_without_stdin("agentFTP slave")
+                    wait_without_stdin("agent-remote-sync slave")
                     break
                 if command in ("q", "quit", "exit"):
                     break
@@ -590,6 +601,8 @@ def run_slave(
     except KeyboardInterrupt:
         print()
     finally:
+        heartbeat.set()
+        mark_instance_stopped(instance["id"])
         state.log("stopping slave")
         server.shutdown()
         server.server_close()
@@ -621,10 +634,10 @@ def prepare_tls(
         return ensure_self_signed_cert(root)
     if mode == "manual":
         if cert_file is None or key_file is None:
-            raise AgentFTPError(400, "missing_tls_files", "--cert-file and --key-file are required for --tls manual")
+            raise AgentRemoteSyncError(400, "missing_tls_files", "--cert-file and --key-file are required for --tls manual")
         cert = cert_file.expanduser().resolve()
         key = key_file.expanduser().resolve()
         if not cert.exists() or not key.exists():
-            raise AgentFTPError(404, "tls_file_not_found", "TLS certificate or key file was not found")
+            raise AgentRemoteSyncError(404, "tls_file_not_found", "TLS certificate or key file was not found")
         return TLSFiles(cert, key, certificate_fingerprint(cert))
-    raise AgentFTPError(400, "bad_tls_mode", "TLS mode must be off, self-signed, or manual")
+    raise AgentRemoteSyncError(400, "bad_tls_mode", "TLS mode must be off, self-signed, or manual")

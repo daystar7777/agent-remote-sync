@@ -9,24 +9,33 @@ from urllib.parse import urlparse
 from . import __version__
 from .bootstrap import format_summary, run_bootstrap
 from .cleanup import cleanup_stale_partials
-from .common import AgentFTPError
+from .common import AgentRemoteSyncError
 from .common import DEFAULT_PORT, DEFAULT_UI_PORT
 from .console import relaunch_in_console_if_needed
 from .connections import get_connection, iter_connections, normalize_alias, remove_connection, set_connection
+from .dashboard import DEFAULT_DASHBOARD_PORT, build_dashboard_status, run_dashboard
 from .headless import handoff as send_handoff
 from .headless import pull, push, report, tell
 from .inbox import claim_instruction, list_instructions, read_instruction
 from .master import RemoteClient, run_master
+from .registry import list_instances, stop_instance
 from .slave import run_slave
+from .state import list_transfer_events, list_transfer_sessions
 from .sync import sync_plan_pull, sync_plan_push, sync_pull, sync_push, write_plan
 from .tls import fetch_remote_fingerprint, format_fingerprint, is_https_endpoint, normalize_fingerprint
 from .worker import run_worker_loop, run_worker_once
 from .workmem import install_work_mem, is_installed, record_host_event, require_work_mem
 
 
+PROJECT_NAME = "agent-remote-sync"
+
+
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(prog="agentftp")
-    parser.add_argument("--version", action="version", version=f"agentFTP {__version__}")
+    prog = Path(sys.argv[0]).name if argv is None else PROJECT_NAME
+    if prog in ("__main__.py", "-m"):
+        prog = PROJECT_NAME
+    parser = argparse.ArgumentParser(prog=prog)
+    parser.add_argument("--version", action="version", version=f"{PROJECT_NAME} {__version__}")
     subcommands = parser.add_subparsers(dest="command", required=True)
 
     bootstrap = subcommands.add_parser("bootstrap", help="check and prepare prerequisites")
@@ -48,7 +57,7 @@ def main(argv: list[str] | None = None) -> None:
     slave.add_argument("--port", type=int, default=DEFAULT_PORT, help="listen port")
     slave.add_argument("--host", default="0.0.0.0", help="listen host")
     slave.add_argument("--password", help="session password; omit to prompt")
-    slave.add_argument("--model-id", default="agentftp-slave", help="model/profile used by this slave agent")
+    slave.add_argument("--model-id", default="agent-remote-sync-slave", help="model/profile used by this slave agent")
     slave.add_argument(
         "--firewall",
         choices=["ask", "yes", "no"],
@@ -91,6 +100,21 @@ def main(argv: list[str] | None = None) -> None:
 
     subcommands.add_parser("connections", help="list saved connection aliases")
 
+    ps_parser = subcommands.add_parser("ps", help="list local agent-remote-sync master/slave/dashboard processes")
+    ps_parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    status = subcommands.add_parser("status", help="show local agent-remote-sync dashboard status")
+    status.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
+    stop = subcommands.add_parser("stop", help="stop a local agent-remote-sync process from the registry")
+    stop.add_argument("instance_id", help="instance id from agent-remote-sync ps")
+    stop.add_argument("--yes", action="store_true", help="confirm process stop without prompting")
+
+    history = subcommands.add_parser("history", help="show transfer sessions for a project")
+    history.add_argument("--root", default=".", help="project root")
+    history.add_argument("--events", default="", help="show events for a session id")
+    history.add_argument("--json", action="store_true", help="print machine-readable JSON")
+
     disconnect = subcommands.add_parser("disconnect", help="remove a saved connection alias")
     disconnect.add_argument("name", help="connection alias to remove")
 
@@ -108,6 +132,16 @@ def main(argv: list[str] | None = None) -> None:
         help="open long-running master mode in a visible console when possible",
     )
     add_tls_client_args(master)
+
+    dashboard = subcommands.add_parser("dashboard", help="run local agent-remote-sync process dashboard")
+    dashboard.add_argument("--port", type=int, default=DEFAULT_DASHBOARD_PORT, help="local dashboard port")
+    dashboard.add_argument("--no-browser", action="store_true", help="print the dashboard URL without opening it")
+    dashboard.add_argument(
+        "--console",
+        choices=["auto", "yes", "no"],
+        default="auto",
+        help="open dashboard in a visible console when possible",
+    )
 
     push_parser = subcommands.add_parser("push", help="headless upload to a slave")
     push_parser.add_argument("host", help="slave host, IP, host:port, URL, or saved alias")
@@ -199,23 +233,23 @@ def main(argv: list[str] | None = None) -> None:
     add_tls_client_args(report_parser)
 
     inbox = subcommands.add_parser("inbox", help="list or read local received instructions")
-    inbox.add_argument("--root", default=".", help="slave root containing .agentftp_inbox")
+    inbox.add_argument("--root", default=".", help="slave root containing .agent_remote_sync_inbox")
     inbox.add_argument("--read", help="instruction id to print")
     inbox.add_argument("--claim", help="instruction id to claim for local worker execution")
 
     worker = subcommands.add_parser("worker", help="claim and optionally execute received autoRun handoffs")
-    worker.add_argument("--root", default=".", help="project/slave root containing .agentftp_inbox")
+    worker.add_argument("--root", default=".", help="project/slave root containing .agent_remote_sync_inbox")
     worker.add_argument("--once", action="store_true", help="process one instruction and exit")
     worker.add_argument("--instruction-id", default="", help="specific instruction id to process")
     worker.add_argument(
         "--execute",
         choices=["never", "ask", "yes"],
         default="never",
-        help="show plan only, ask before running, or run explicit agentftp-run commands",
+        help="show plan only, ask before running, or run explicit agent-remote-sync-run commands",
     )
     worker.add_argument("--include-manual", action="store_true", help="allow instructions without autoRun")
     worker.add_argument("--report-to", default="", help="override callback alias for the STATUS_REPORT")
-    worker.add_argument("--from-name", default="agentftp-worker", help="sender name for worker reports")
+    worker.add_argument("--from-name", default="agent-remote-sync-worker", help="sender name for worker reports")
     worker.add_argument("--timeout", type=int, default=600, help="per-command timeout in seconds")
     worker.add_argument("--interval", type=float, default=5.0, help="daemon polling interval in seconds")
     worker.add_argument(
@@ -241,7 +275,7 @@ def main(argv: list[str] | None = None) -> None:
 
     effective_argv = list(argv) if argv is not None else sys.argv[1:]
     args = parser.parse_args(effective_argv)
-    if args.command in ("slave", "master"):
+    if args.command in ("slave", "master", "dashboard"):
         if relaunch_in_console_if_needed(effective_argv, mode=args.console):
             return
     try:
@@ -259,6 +293,38 @@ def main(argv: list[str] | None = None) -> None:
         elif args.command == "install-work-mem":
             install_work_mem(Path(args.root))
             print(f"agent-work-mem installed in {Path(args.root).resolve() / 'AIMemory'}")
+        elif args.command == "ps":
+            instances = list_instances(include_stopped=False)
+            if args.json:
+                print_json({"instances": instances})
+            else:
+                print_instances(instances)
+        elif args.command == "status":
+            data = build_dashboard_status()
+            if args.json:
+                print_json(data)
+            else:
+                print_status(data)
+        elif args.command == "stop":
+            if not args.yes:
+                if not sys.stdin.isatty():
+                    raise AgentRemoteSyncError(400, "confirmation_required", "Rerun with --yes to stop without an interactive prompt")
+                answer = input(f"Stop agent-remote-sync instance {args.instance_id}? [y/N] ").strip().lower()
+                if answer not in ("y", "yes"):
+                    raise SystemExit("cancelled")
+            print_json(stop_instance(args.instance_id, confirm=True))
+        elif args.command == "history":
+            root = Path(args.root)
+            if args.events:
+                data = {"events": list_transfer_events(root, session_id=args.events)}
+            else:
+                data = {"sessions": list_transfer_sessions(root)}
+            if args.json:
+                print_json(data)
+            else:
+                print_history(data)
+        elif args.command == "dashboard":
+            run_dashboard(args.port, open_browser=not args.no_browser)
         else:
             require_work_mem(command_root(args), prompt_install=True)
         if args.command == "slave":
@@ -295,7 +361,7 @@ def main(argv: list[str] | None = None) -> None:
                 host=host,
                 port=port,
                 event_type="CONNECTED",
-                summary=f"Saved agentFTP connection {entry['name']} -> {client.base_url}.",
+                summary=f"Saved agent-remote-sync connection {entry['name']} -> {client.base_url}.",
             )
             print(f"connected: {entry['name']} -> {client.base_url}")
         elif args.command == "connections":
@@ -319,6 +385,7 @@ def main(argv: list[str] | None = None) -> None:
                 tls_fingerprint=target.tls_fingerprint,
                 tls_insecure=target.tls_insecure,
                 ca_file=target.ca_file,
+                alias=target.alias,
             )
         elif args.command == "push":
             target = resolve_target(args.host, args.port, args.password, args)
@@ -506,7 +573,7 @@ def main(argv: list[str] | None = None) -> None:
                         timeout=args.timeout,
                     )
                 )
-    except AgentFTPError as exc:
+    except AgentRemoteSyncError as exc:
         raise SystemExit(f"{exc.code}: {exc.message}") from exc
 
 
@@ -607,11 +674,11 @@ def connect_remote(
     scopes = parse_scopes(getattr(args, "scopes", ""))
     try:
         return RemoteClient(host, port, password, scopes=scopes, **tls_kwargs), tls_kwargs
-    except AgentFTPError as exc:
+    except AgentRemoteSyncError as exc:
         if not should_offer_tls_trust(host, tls_kwargs, exc):
             raise
     if not sys.stdin.isatty():
-        raise AgentFTPError(
+        raise AgentRemoteSyncError(
             495,
             "tls_untrusted",
             "HTTPS certificate is not trusted. Re-run with --tls-fingerprint, --ca-file, or --tls-insecure.",
@@ -621,7 +688,7 @@ def connect_remote(
     print(f"SHA-256 fingerprint: {format_fingerprint(fingerprint)}")
     answer = input("Trust this certificate for this saved connection? [y/N] ").strip().lower()
     if answer not in ("y", "yes"):
-        raise AgentFTPError(495, "tls_untrusted", "TLS certificate was not trusted")
+        raise AgentRemoteSyncError(495, "tls_untrusted", "TLS certificate was not trusted")
     tls_kwargs["tls_fingerprint"] = fingerprint
     return RemoteClient(host, port, password, scopes=scopes, **tls_kwargs), tls_kwargs
 
@@ -632,7 +699,7 @@ def parse_scopes(value: str) -> list[str] | None:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
-def should_offer_tls_trust(host: str, tls_kwargs: dict, exc: AgentFTPError) -> bool:
+def should_offer_tls_trust(host: str, tls_kwargs: dict, exc: AgentRemoteSyncError) -> bool:
     if not is_https_endpoint(host):
         return False
     if tls_kwargs.get("tls_fingerprint") or tls_kwargs.get("tls_insecure") or tls_kwargs.get("ca_file"):
@@ -642,7 +709,7 @@ def should_offer_tls_trust(host: str, tls_kwargs: dict, exc: AgentFTPError) -> b
 
 
 def doctor() -> None:
-    print(f"agentFTP {__version__}")
+    print(f"{PROJECT_NAME} {__version__}")
     print(f"Python {platform.python_version()}")
     print(f"Platform {platform.platform()}")
     print(f"Executable {sys.executable}")
@@ -671,6 +738,51 @@ def print_json(value: object) -> None:
     import json
 
     print(json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True))
+
+
+def print_instances(instances: list[dict]) -> None:
+    if not instances:
+        print("No running agent-remote-sync instances.")
+        return
+    for item in instances:
+        role = item.get("role", "")
+        status = item.get("status", "")
+        alias = item.get("alias") or item.get("remote") or item.get("host") or ""
+        print(
+            f"{item.get('id')}\t{role}\t{status}\tpid={item.get('pid')}\t"
+            f"port={item.get('port')}\t{alias}\t{item.get('root')}"
+        )
+
+
+def print_status(data: dict) -> None:
+    print("agent-remote-sync status")
+    print(f"instances: {len(data.get('instances', []))}")
+    print(f"channels:  {len(data.get('channels', []))}")
+    for channel in data.get("channels", []):
+        print(
+            f"- {channel.get('alias')}: {channel.get('status')} "
+            f"{channel.get('host')}:{channel.get('port')}"
+        )
+    for project in data.get("projects", []):
+        latest = project.get("latestTransfer") or {}
+        handoff = project.get("latestHandoff") or {}
+        print(f"- project {project.get('name')}: {project.get('root')}")
+        if latest:
+            print(f"  latest transfer: {latest.get('kind')} {latest.get('status')} {latest.get('totalBytes', 0)} bytes")
+        if handoff:
+            print(f"  latest handoff: {handoff.get('type', '')} {handoff.get('title') or handoff.get('filename')}")
+
+
+def print_history(data: dict) -> None:
+    if "events" in data:
+        for event in data["events"]:
+            print(f"{event.get('session')}\t{event.get('event')}\t{event.get('source', '')}\t{event.get('target', '')}")
+        return
+    for session in data.get("sessions", []):
+        print(
+            f"{session.get('id')}\t{session.get('kind')}\t{session.get('status')}\t"
+            f"{session.get('doneBytes', 0)}/{session.get('totalBytes', 0)}"
+        )
 
 
 def command_root(args: argparse.Namespace) -> Path:

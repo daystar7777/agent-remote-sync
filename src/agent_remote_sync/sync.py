@@ -7,7 +7,7 @@ from typing import Any
 
 from .common import (
     CHUNK_SIZE,
-    AgentFTPError,
+    AgentRemoteSyncError,
     RESERVED_DIR_NAMES,
     clean_rel_path,
     ensure_storage_available,
@@ -305,9 +305,9 @@ def resolve_local_sync_root(local_root: Path, local_path: Path) -> Path:
     target = local_path if local_path.is_absolute() else local_root / local_path
     target = target.resolve()
     if not target.exists():
-        raise AgentFTPError(404, "not_found", f"Local sync path not found: {local_path}")
+        raise AgentRemoteSyncError(404, "not_found", f"Local sync path not found: {local_path}")
     if not target.is_dir():
-        raise AgentFTPError(400, "sync_requires_directory", "sync currently requires a directory")
+        raise AgentRemoteSyncError(400, "sync_requires_directory", "sync currently requires a directory")
     return target
 
 
@@ -366,10 +366,10 @@ def remote_index(remote: RemoteClient, remote_dir: str, *, missing_ok: bool = Tr
     stat = remote.stat(remote_dir)
     if not stat.get("exists"):
         if not missing_ok:
-            raise AgentFTPError(404, "not_found", f"Remote sync path not found: {remote_dir}")
+            raise AgentRemoteSyncError(404, "not_found", f"Remote sync path not found: {remote_dir}")
         return {}
     if stat["entry"]["type"] != "dir":
-        raise AgentFTPError(400, "sync_requires_directory", "remote sync path must be a directory")
+        raise AgentRemoteSyncError(400, "sync_requires_directory", "remote sync path must be a directory")
     entries: dict[str, dict[str, Any]] = {}
     for entry in remote.tree(remote_dir):
         if entry["path"] == remote_dir or entry["type"] != "file":
@@ -389,10 +389,10 @@ def remote_dir_index(remote: RemoteClient, remote_dir: str, *, missing_ok: bool 
     stat = remote.stat(remote_dir)
     if not stat.get("exists"):
         if not missing_ok:
-            raise AgentFTPError(404, "not_found", f"Remote sync path not found: {remote_dir}")
+            raise AgentRemoteSyncError(404, "not_found", f"Remote sync path not found: {remote_dir}")
         return {}
     if stat["entry"]["type"] != "dir":
-        raise AgentFTPError(400, "sync_requires_directory", "remote sync path must be a directory")
+        raise AgentRemoteSyncError(400, "sync_requires_directory", "remote sync path must be a directory")
     entries: dict[str, dict[str, Any]] = {}
     for entry in remote.tree(remote_dir):
         if entry["path"] == remote_dir or entry["type"] != "dir":
@@ -431,7 +431,7 @@ def remote_relative(base: str, child: str) -> str:
     prefix = base_clean + "/"
     if child_clean.startswith(prefix):
         return child_clean[len(prefix) :]
-    raise AgentFTPError(400, "bad_tree", "Remote tree returned a path outside the requested sync root")
+    raise AgentRemoteSyncError(400, "bad_tree", "Remote tree returned a path outside the requested sync root")
 
 
 def close_mtime(left: Any, right: Any) -> bool:
@@ -507,7 +507,7 @@ def resolve_delete_candidates(candidates: list[dict[str, Any]], delete: bool, si
     except EOFError:
         return False
     if answer not in ("y", "yes"):
-        raise AgentFTPError(409, "delete_cancelled", "Sync delete was cancelled")
+        raise AgentRemoteSyncError(409, "delete_cancelled", "Sync delete was cancelled")
     return True
 
 
@@ -524,9 +524,9 @@ def delete_local_items(target_root: Path, candidates: list[dict[str, Any]], logg
         try:
             target.relative_to(root)
         except ValueError as exc:
-            raise AgentFTPError(403, "path_escape", "Delete candidate escapes sync root") from exc
+            raise AgentRemoteSyncError(403, "path_escape", "Delete candidate escapes sync root") from exc
         if target.is_dir():
-            raise AgentFTPError(400, "delete_candidate_not_file", "Sync delete candidates must be files")
+            raise AgentRemoteSyncError(400, "delete_candidate_not_file", "Sync delete candidates must be files")
         target.unlink(missing_ok=True)
         logger.event("delete_completed", target=str(target), size=int(item.get("size", 0)))
 
@@ -568,9 +568,9 @@ def transfer_push_items(
         status = remote.upload_status(item["target"], item["size"])
         offset = int(status.get("partialSize", 0))
         if status.get("exists") and not overwrite:
-            raise AgentFTPError(409, "exists", f"Remote file exists: {item['target']}")
+            raise AgentRemoteSyncError(409, "exists", f"Remote file exists: {item['target']}")
         if offset > item["size"]:
-            raise AgentFTPError(409, "bad_partial", f"Remote partial is larger than source: {item['target']}")
+            raise AgentRemoteSyncError(409, "bad_partial", f"Remote partial is larger than source: {item['target']}")
         logger.file_started(str(source), item["target"], item["size"], resume_offset=offset)
         print(f"sync upload {item['rel']} -> {item['target']}")
         done += offset
@@ -607,7 +607,7 @@ def transfer_pull_items(
     for item in items:
         target = target_root / item["rel"]
         if target.exists() and not overwrite:
-            raise AgentFTPError(409, "exists", f"Local file exists: {item['target']}")
+            raise AgentRemoteSyncError(409, "exists", f"Local file exists: {item['target']}")
         part, meta = partial_paths(target_root, "/" + item["rel"])
         offset = part.stat().st_size if part.exists() else 0
         if offset > item["size"]:
@@ -622,16 +622,16 @@ def transfer_pull_items(
                 length = min(CHUNK_SIZE, item["size"] - current_offset)
                 chunk = remote.download_chunk(item["source"], current_offset, length)
                 if not chunk:
-                    raise AgentFTPError(502, "empty_chunk", "Remote returned an empty chunk")
+                    raise AgentRemoteSyncError(502, "empty_chunk", "Remote returned an empty chunk")
                 handle.write(chunk)
                 current_offset += len(chunk)
                 done += len(chunk)
                 print_progress(done, total)
         if part.stat().st_size != item["size"]:
-            raise AgentFTPError(400, "size_mismatch", f"Downloaded size mismatch: {item['target']}")
+            raise AgentRemoteSyncError(400, "size_mismatch", f"Downloaded size mismatch: {item['target']}")
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists() and not overwrite:
-            raise AgentFTPError(409, "exists", f"Local file exists: {item['target']}")
+            raise AgentRemoteSyncError(409, "exists", f"Local file exists: {item['target']}")
         part.replace(target)
         if meta.exists():
             meta.unlink()

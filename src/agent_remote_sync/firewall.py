@@ -5,7 +5,7 @@ import shutil
 import subprocess
 import sys
 
-from .common import AgentFTPError
+from .common import AgentRemoteSyncError
 
 
 def maybe_open_firewall(port: int, mode: str = "ask") -> None:
@@ -16,7 +16,7 @@ def maybe_open_firewall(port: int, mode: str = "ask") -> None:
             print("Firewall rule not changed; run with --firewall yes to open it explicitly.")
             return
         answer = input(
-            f"Open the local firewall for agentFTP TCP port {port}? "
+            f"Open the local firewall for agent-remote-sync TCP port {port}? "
             "Choose no for local-only testing or if your agent will handle network setup. "
             "Only open it on a trusted network. [y/N] "
         ).strip().lower()
@@ -28,7 +28,7 @@ def maybe_open_firewall(port: int, mode: str = "ask") -> None:
 
 def open_firewall_port(port: int) -> None:
     if port <= 0 or port > 65535:
-        raise AgentFTPError(400, "bad_port", "Port must be between 1 and 65535")
+        raise AgentRemoteSyncError(400, "bad_port", "Port must be between 1 and 65535")
     system = platform.system().lower()
     if system == "windows":
         run_command(
@@ -38,7 +38,7 @@ def open_firewall_port(port: int) -> None:
                 "firewall",
                 "add",
                 "rule",
-                f"name=agentFTP {port}",
+                f"name=agent-remote-sync {port}",
                 "dir=in",
                 "action=allow",
                 "protocol=TCP",
@@ -55,12 +55,12 @@ def open_firewall_port(port: int) -> None:
             run_command(["firewall-cmd", "--reload"])
             return
     if system == "darwin":
-        raise AgentFTPError(
+        raise AgentRemoteSyncError(
             501,
             "firewall_manual_required",
             "macOS port firewall rules require manual pf/socketfilterfw configuration.",
         )
-    raise AgentFTPError(
+    raise AgentRemoteSyncError(
         501,
         "firewall_unsupported",
         "Automatic firewall rule creation is not supported on this OS.",
@@ -71,10 +71,10 @@ def run_command(command: list[str]) -> None:
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
     except OSError as exc:
-        raise AgentFTPError(500, "firewall_command_failed", str(exc)) from exc
+        raise AgentRemoteSyncError(500, "firewall_command_failed", str(exc)) from exc
     if result.returncode != 0:
         detail = (result.stderr or result.stdout or "").strip()
-        raise AgentFTPError(
+        raise AgentRemoteSyncError(
             500,
             "firewall_command_failed",
             detail or f"Command failed: {' '.join(command)}",

@@ -1,4 +1,4 @@
-# agentFTP Security Model
+﻿# agent-remote-sync Security Model
 
 ## Root Confinement
 
@@ -22,7 +22,7 @@ Bearer tokens can be scoped at login time. The default token keeps the normal
 master behavior and grants all scopes. Automation can request a narrower token:
 
 ```powershell
-agentftp connect reviewer 100.64.1.20 --scopes read,handoff
+agent-remote-sync connect reviewer 100.64.1.20 --scopes read,handoff
 ```
 
 Current scopes:
@@ -37,16 +37,16 @@ Current scopes:
 Slave mode supports native HTTPS:
 
 ```powershell
-agentftp slave --tls self-signed
-agentftp slave --tls manual --cert-file ./cert.pem --key-file ./key.pem
+agent-remote-sync slave --tls self-signed
+agent-remote-sync slave --tls manual --cert-file ./cert.pem --key-file ./key.pem
 ```
 
 `self-signed` generates a local certificate and stores the private key under the
-agentFTP config directory, not inside the exposed slave root. The slave prints a
+agent-remote-sync config directory, not inside the exposed slave root. The slave prints a
 SHA-256 fingerprint. Pin that fingerprint from the master side:
 
 ```powershell
-agentftp connect lab https://100.64.1.20:7171 --tls-fingerprint <sha256-fingerprint>
+agent-remote-sync connect lab https://100.64.1.20:7171 --tls-fingerprint <sha256-fingerprint>
 ```
 
 Saved connections retain the fingerprint, so later `master`, `push`, `pull`,
@@ -64,9 +64,9 @@ or bearer tokens.
 Slave mode can help open the local firewall:
 
 ```powershell
-agentftp slave --firewall ask
-agentftp slave --firewall yes
-agentftp slave --firewall no
+agent-remote-sync slave --firewall ask
+agent-remote-sync slave --firewall yes
+agent-remote-sync slave --firewall no
 ```
 
 `ask` is the default. It prompts before changing firewall rules. `yes` attempts
@@ -84,7 +84,7 @@ cross-network use.
 
 ## Flooding And DoS
 
-agentFTP has application-level protections:
+agent-remote-sync has application-level protections:
 
 - per-IP rate limits for unauthenticated and authenticated requests,
 - temporary IP block after repeated failed login attempts,
@@ -112,21 +112,21 @@ password was valid at login time.
 ## Approval Prompts On The Slave
 
 The slave is a console process, and worker execution happens on the receiver
-host. If `agentftp worker --execute ask` is used, or if the underlying agent
+host. If `agent-remote-sync worker --execute ask` is used, or if the underlying agent
 runtime is configured to ask for filesystem/shell/network permission, execution
 waits on that slave console. The master cannot approve that prompt remotely.
 
 This is intentional for supervised receivers, but it is a common source of
 "stuck" headless handoffs. For unattended operation, configure the slave-side
 agent policy deliberately, keep the project root narrow, use scoped tokens, and
-run only explicit `agentftp-run:` commands from trusted senders.
+run only explicit `agent-remote-sync-run:` commands from trusted senders.
 
 ## Partial Files
 
-Incomplete uploads are stored in `.agentftp_partial`. This folder is reserved by
-agentFTP and hidden from normal listings. Cancelled or interrupted transfers
+Incomplete uploads are stored in `.agent_remote_sync_partial`. This folder is reserved by
+agent-remote-sync and hidden from normal listings. Cancelled or interrupted transfers
 leave partial files in place for resume; stale partials can be removed with
-`agentftp cleanup --older-than-hours 24`.
+`agent-remote-sync cleanup --older-than-hours 24`.
 
 ## Storage And Permission Failures
 
@@ -139,9 +139,9 @@ as structured errors rather than raw tracebacks:
 - `not_directory`
 - `storage_error`
 
-Transfer sessions record these as `failed` in `.agentftp/sessions`. The slave is
+Transfer sessions record these as `failed` in `.agent_remote_sync/sessions`. The slave is
 quiet by default and only returns structured errors to the caller; use
-`agentftp slave --verbose` for console request logs while debugging.
+`agent-remote-sync slave --verbose` for console request logs while debugging.
 
 ## Current Residual Risks
 

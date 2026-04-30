@@ -3,22 +3,22 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agentftp"
+name = "agent-remote-sync"
 version = "0.1.0"
-description = "Agent-friendly cross-host file/folder transfer and remote handoff tool"
+description = "Agent-friendly cross-host file/folder sync and remote handoff tool"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
-authors = [{ name = "agentFTP contributors" }]
+authors = [{ name = "agent-remote-sync contributors" }]
 dependencies = ["cryptography>=42"]
 
 [project.urls]
-Homepage = "https://github.com/daystar7777/agentFTP"
-Repository = "https://github.com/daystar7777/agentFTP"
-Issues = "https://github.com/daystar7777/agentFTP/issues"
+Homepage = "https://github.com/daystar7777/agent-remote-sync"
+Repository = "https://github.com/daystar7777/agent-remote-sync"
+Issues = "https://github.com/daystar7777/agent-remote-sync/issues"
 
 [project.scripts]
-agentftp = "agentftp.cli:main"
+agent-remote-sync = "agent_remote_sync.cli:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -27,4 +27,4 @@ package-dir = { "" = "src" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-agentftp = ["web/*"]
+agent_remote_sync = ["web/*"]

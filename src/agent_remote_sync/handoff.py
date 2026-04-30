@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .common import AgentFTPError, make_token
+from .common import AgentRemoteSyncError, make_token
 from .workmem import append_event, memory_dir, require_work_mem
 
 
@@ -26,7 +26,7 @@ def create_handoff(
     *,
     title: str,
     task: str,
-    from_model: str = "agentftp",
+    from_model: str = "agent-remote-sync",
     to_model: str = "any-capable",
     message_type: str = "DECISION_RELAY",
     priority: str = "NORMAL",
@@ -43,10 +43,10 @@ def create_handoff(
 ) -> dict[str, Any]:
     require_work_mem(root, prompt_install=False)
     if message_type not in VALID_TYPES:
-        raise AgentFTPError(400, "bad_handoff_type", "Unsupported AICP message type")
+        raise AgentRemoteSyncError(400, "bad_handoff_type", "Unsupported AICP message type")
     handoff_id = time.strftime("%Y%m%d-%H%M%S-") + make_token()[:10]
     slug = slugify(title or task or handoff_id)
-    author = slugify(from_model) or "agentftp"
+    author = slugify(from_model) or "agent-remote-sync"
     filename = f"handoff_{slug}.{author}.md"
     path = unique_path(memory_dir(root) / filename)
     content = render_handoff(
@@ -75,13 +75,13 @@ def create_handoff(
         append_event(
             root,
             "HANDOFF_RECEIVED",
-            f"← {from_model}: {path.name}\nAcknowledged. External agentFTP handoff received.",
+            f"??{from_model}: {path.name}\nAcknowledged. External agent-remote-sync handoff received.",
         )
     else:
         append_event(
             root,
             "HANDOFF",
-            f"→ {to_model}: {one_line(task)} See {path.name}.\n"
+            f"??{to_model}: {one_line(task)} See {path.name}.\n"
             f"Priority: {priority}. Reply by: {reply_by}.",
         )
     return {
@@ -104,7 +104,7 @@ def create_handoff(
 
 
 def receive_handoff(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
-    title = str(payload.get("title") or payload.get("task") or "agentFTP handoff")
+    title = str(payload.get("title") or payload.get("task") or "agent-remote-sync handoff")
     return create_handoff(
         root,
         title=title,
@@ -114,14 +114,14 @@ def receive_handoff(root: Path, payload: dict[str, Any]) -> dict[str, Any]:
         message_type=str(payload.get("type", "DECISION_RELAY")),
         priority=str(payload.get("priority", "NORMAL")),
         reply_by=str(payload.get("replyBy", "when convenient")),
-        re=str(payload.get("re", "agentFTP external handoff")),
+        re=str(payload.get("re", "agent-remote-sync external handoff")),
         required_capability=str(payload.get("requiredCapability", "none")),
         paths=list(payload.get("paths", [])) if isinstance(payload.get("paths", []), list) else [],
         expected_report=str(payload.get("expectedReport", "")),
         auto_run=bool(payload.get("autoRun", False)),
         parent_id=str(payload.get("parentId", "")),
         direction="external",
-        executor_model=str(payload.get("executorModel", "agentftp-slave")),
+        executor_model=str(payload.get("executorModel", "agent-remote-sync-slave")),
         callback_alias=str(payload.get("callbackAlias", "")),
     )
 
@@ -177,7 +177,7 @@ def render_handoff(
 **Re**: {re}
 **Required capability**: {required_capability}
 
-## agentFTP metadata
+## agent-remote-sync metadata
 
 - handoffId: `{handoff_id}`
 - parentId: `{parent_id or "none"}`
@@ -190,11 +190,11 @@ def render_handoff(
 
 ## Summary
 
-agentFTP handoff for a remote agent task.
+agent-remote-sync handoff for a remote agent task.
 
 ## Context
 
-This handoff arrived through agentFTP. Treat paths as relative to the receiving
+This handoff arrived through agent-remote-sync. Treat paths as relative to the receiving
 slave root unless otherwise stated.
 
 ## Content
@@ -234,9 +234,9 @@ def unique_path(path: Path) -> Path:
         candidate = path.with_name(f"{stem}-{index}{suffix}")
         if not candidate.exists():
             return candidate
-    raise AgentFTPError(500, "handoff_name_exhausted", "Could not create unique handoff file")
+    raise AgentRemoteSyncError(500, "handoff_name_exhausted", "Could not create unique handoff file")
 
 
 def one_line(text: str) -> str:
     collapsed = " ".join(text.split())
-    return collapsed[:100] if collapsed else "agentFTP handoff"
+    return collapsed[:100] if collapsed else "agent-remote-sync handoff"

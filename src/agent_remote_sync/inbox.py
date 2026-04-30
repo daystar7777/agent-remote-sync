@@ -5,13 +5,14 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .common import AgentFTPError, INBOX_DIR_NAME, make_token
+from .common import AgentRemoteSyncError, INBOX_DIR_NAME, make_token
 from .handoff import receive_handoff
 from .workmem import append_event
 
 
 def inbox_root(root: Path) -> Path:
-    path = root.resolve() / INBOX_DIR_NAME
+    root = root.resolve()
+    path = root / INBOX_DIR_NAME
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -25,7 +26,7 @@ def create_instruction(
     paths: list[str] | None = None,
     auto_run: bool = False,
     handoff: dict[str, Any] | None = None,
-    executor_model: str = "agentftp-slave",
+    executor_model: str = "agent-remote-sync-slave",
 ) -> dict[str, Any]:
     instruction_id = time.strftime("%Y%m%d-%H%M%S-") + make_token()[:10]
     folder = inbox_root(root) / instruction_id
@@ -87,7 +88,7 @@ def instruction_manifest_path(root: Path, instruction_id: str) -> Path:
 def write_instruction(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     instruction_id = str(manifest.get("id", ""))
     if not instruction_id:
-        raise AgentFTPError(400, "missing_instruction_id", "Instruction id is required")
+        raise AgentRemoteSyncError(400, "missing_instruction_id", "Instruction id is required")
     path = instruction_manifest_path(root, instruction_id)
     if not path.exists():
         raise FileNotFoundError(instruction_id)
@@ -95,11 +96,11 @@ def write_instruction(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
     return manifest
 
 
-def claim_instruction(root: Path, instruction_id: str, *, claimed_by: str = "agentftp-worker") -> dict[str, Any]:
+def claim_instruction(root: Path, instruction_id: str, *, claimed_by: str = "agent-remote-sync-worker") -> dict[str, Any]:
     manifest = read_instruction(root, instruction_id)
     state = str(manifest.get("state", "received"))
     if state != "received":
-        raise AgentFTPError(409, "instruction_not_claimable", f"Instruction is already {state}")
+        raise AgentRemoteSyncError(409, "instruction_not_claimable", f"Instruction is already {state}")
     manifest["state"] = "claimed"
     manifest["claimedAt"] = time.time()
     manifest["claimedBy"] = claimed_by
@@ -107,7 +108,7 @@ def claim_instruction(root: Path, instruction_id: str, *, claimed_by: str = "age
     append_event(
         root,
         "HANDOFF_CLAIMED",
-        f"Claimed external agentFTP instruction {instruction_id}.\n"
+        f"Claimed external agent-remote-sync instruction {instruction_id}.\n"
         f"Handoff: {manifest.get('handoffFile', 'none')}\n"
         f"Task: {str(manifest.get('task', ''))[:200]}",
     )

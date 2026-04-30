@@ -6,7 +6,7 @@ from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Deque
 
-from .common import AgentFTPError
+from .common import AgentRemoteSyncError
 
 
 @dataclass
@@ -77,13 +77,13 @@ class SecurityState:
         with self.lock:
             until = self.blocked_until.get(ip, 0)
             if until > now:
-                raise AgentFTPError(429, "temporarily_blocked", "Client is temporarily blocked")
+                raise AgentRemoteSyncError(429, "temporarily_blocked", "Client is temporarily blocked")
             if until:
                 self.blocked_until.pop(ip, None)
         limiter = self.authenticated if authenticated else self.unauthenticated
         if not limiter.allow(ip, now):
             self.note_overload(ip)
-            raise AgentFTPError(429, "rate_limited", "Too many requests")
+            raise AgentRemoteSyncError(429, "rate_limited", "Too many requests")
 
     def note_login_failure(self, ip: str) -> None:
         now = time.time()

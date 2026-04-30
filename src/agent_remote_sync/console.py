@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 
-CONSOLE_CHILD_ENV = "AGENTFTP_CONSOLE_CHILD"
+CONSOLE_CHILD_ENV = "AGENT_REMOTE_SYNC_CONSOLE_CHILD"
 
 
 def should_relaunch_in_console(
@@ -60,14 +60,14 @@ def relaunch_in_console_if_needed(argv: list[str], *, mode: str, cwd: Path | Non
         return False
     env = dict(os.environ)
     env[CONSOLE_CHILD_ENV] = "1"
-    command = [sys.executable, "-m", "agentftp", *argv]
+    command = [sys.executable, "-m", "agent_remote_sync", *argv]
     try:
         open_console(command, cwd=(cwd or Path.cwd()).resolve(), env=env)
     except OSError as exc:
-        print(f"agentFTP could not open a new console window: {exc}")
+        print(f"agent-remote-sync could not open a new console window: {exc}")
         print("Continuing in the current process.")
         return False
-    print("agentFTP opened in a new console window.")
+    print("agent-remote-sync opened in a new console window.")
     return True
 
 

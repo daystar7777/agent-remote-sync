@@ -1,9 +1,9 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>agentFTP</title>
+  <title>agent-remote-sync</title>
   <style>
     :root {
       color-scheme: light;
@@ -415,7 +415,7 @@
 <body>
   <header>
     <div class="brand">
-      <h1>agentFTP</h1>
+      <h1>agent-remote-sync</h1>
       <div class="meta" id="remote-meta"></div>
     </div>
     <div class="meta" id="local-meta"></div>
@@ -561,7 +561,7 @@
           ...options
         });
       } catch (error) {
-        throw new Error("Cannot reach the local agentFTP GUI server. The master process may have stopped; restart master mode and reload this page.");
+        throw new Error("Cannot reach the local agent-remote-sync GUI server. The master process may have stopped; restart master mode and reload this page.");
       }
       const data = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -613,9 +613,13 @@
       const stateText = job ? job.state : "queued";
       const doneBytes = Number(job?.doneBytes || 0);
       const totalBytes = Number(job?.totalBytes || transfer.totalBytes || 0);
+      const speed = Number(job?.bytesPerSecond || 0);
+      const eta = job?.etaSeconds;
+      const speedText = speed > 0 ? `${formatBytes(speed)}/s` : "calculating";
+      const etaText = eta !== null && eta !== undefined ? formatDuration(Number(eta)) : "--";
       transferTitleEl.textContent = `${transfer.verb} transfer`;
       transferSummaryEl.textContent =
-        `${stateText}: ${formatBytes(doneBytes)} / ${formatBytes(totalBytes)} · ${transfer.totalFiles} file(s), ${transfer.totalDirs} folder(s)`;
+        `${stateText}: ${formatBytes(doneBytes)} / ${formatBytes(totalBytes)} | ${speedText} | ETA ${etaText} | ${transfer.totalFiles} file(s), ${transfer.totalDirs} folder(s)`;
       if (job?.state === "done") {
         transferCurrentEl.textContent = "Completed";
       } else if (job?.state === "cancelled") {
@@ -666,6 +670,17 @@
     function formatTime(value) {
       if (!value) return "";
       return new Date(value * 1000).toLocaleString();
+    }
+
+    function formatDuration(seconds) {
+      if (!Number.isFinite(seconds) || seconds < 0) return "--";
+      const whole = Math.ceil(seconds);
+      const hours = Math.floor(whole / 3600);
+      const minutes = Math.floor((whole % 3600) / 60);
+      const remaining = whole % 60;
+      if (hours) return `${hours}h ${minutes}m`;
+      if (minutes) return `${minutes}m ${remaining}s`;
+      return `${remaining}s`;
     }
 
     async function load(side) {

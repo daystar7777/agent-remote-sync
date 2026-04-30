@@ -11,7 +11,7 @@ dist/
 .pytest_cache/
 .mypy_cache/
 AIMemory/
-.agentftp_partial/
-.agentftp_handoff/
-.agentftp_inbox/
-.agentftp/
+.agent_remote_sync_partial/
+.agent_remote_sync_handoff/
+.agent_remote_sync_inbox/
+.agent_remote_sync/

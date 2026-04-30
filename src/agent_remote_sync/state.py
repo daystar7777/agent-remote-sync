@@ -5,10 +5,9 @@ import time
 from pathlib import Path
 from typing import Any
 
-from .common import make_token
+from .common import STATE_DIR_NAME, make_token
 
 
-STATE_DIR_NAME = ".agentftp"
 LOG_DIR_NAME = "logs"
 SESSION_DIR_NAME = "sessions"
 PLAN_DIR_NAME = "plans"
@@ -38,6 +37,11 @@ def plans_dir(root: Path) -> Path:
     path = state_dir(root) / PLAN_DIR_NAME
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def existing_state_dirs(root: Path) -> list[Path]:
+    root = root.resolve()
+    return [root / STATE_DIR_NAME]
 
 
 class TransferLogger:
@@ -208,3 +212,46 @@ def rel_state_path(root: Path, path: Path) -> str:
         return rel.as_posix()
     except ValueError:
         return str(path.resolve())
+
+
+def list_transfer_sessions(root: Path, *, limit: int = 20) -> list[dict[str, Any]]:
+    sessions: list[dict[str, Any]] = []
+    for state_path in existing_state_dirs(root):
+        directory = state_path / SESSION_DIR_NAME
+        if not directory.exists():
+            continue
+        for path in directory.glob("*.json"):
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(data, dict):
+                data.setdefault("sessionFile", rel_state_path(root, path))
+                sessions.append(data)
+    sessions.sort(key=lambda item: float(item.get("updatedAt") or item.get("startedAt") or 0), reverse=True)
+    return sessions[:limit]
+
+
+def list_transfer_events(root: Path, *, session_id: str = "", limit: int = 100) -> list[dict[str, Any]]:
+    events: list[dict[str, Any]] = []
+    log_paths: list[Path] = []
+    for state_path in existing_state_dirs(root):
+        directory = state_path / LOG_DIR_NAME
+        if directory.exists():
+            log_paths.extend(directory.glob("transfer-*.jsonl"))
+    for path in sorted(log_paths, key=lambda item: item.stat().st_mtime, reverse=True):
+        try:
+            lines = path.read_text(encoding="utf-8").splitlines()
+        except OSError:
+            continue
+        for line in reversed(lines):
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if session_id and row.get("session") != session_id:
+                continue
+            events.append(row)
+            if len(events) >= limit:
+                return events
+    return events

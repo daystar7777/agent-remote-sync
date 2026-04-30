@@ -8,10 +8,10 @@ from typing import Any
 
 
 def config_home() -> Path:
-    override = os.environ.get("AGENTFTP_HOME")
+    override = os.environ.get("AGENT_REMOTE_SYNC_HOME")
     if override:
         return Path(override).expanduser()
-    return Path.home() / ".agentftp"
+    return Path.home() / ".agent-remote-sync"
 
 
 def connections_path() -> Path:

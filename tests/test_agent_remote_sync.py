@@ -10,19 +10,19 @@ import unittest
 from pathlib import Path
 from urllib.request import Request, urlopen
 
-from agentftp.connections import normalize_alias
-from agentftp.headless import pull, push
-from agentftp.headless import tell as headless_tell
-from agentftp.inbox import list_instructions
-from agentftp.master import AgentFTPMasterServer, MasterState, RemoteClient
-from agentftp.slave import AgentFTPSlaveServer, SlaveState
-from agentftp.workmem import install_work_mem
+from agent_remote_sync.connections import normalize_alias
+from agent_remote_sync.headless import pull, push
+from agent_remote_sync.headless import tell as headless_tell
+from agent_remote_sync.inbox import list_instructions
+from agent_remote_sync.master import AgentRemoteSyncMasterServer, MasterState, RemoteClient
+from agent_remote_sync.slave import AgentRemoteSyncSlaveServer, SlaveState
+from agent_remote_sync.workmem import install_work_mem
 
 
-class AgentFTPTests(unittest.TestCase):
-    def start_slave(self, root: Path, password: str = "secret") -> AgentFTPSlaveServer:
+class AgentRemoteSyncTests(unittest.TestCase):
+    def start_slave(self, root: Path, password: str = "secret") -> AgentRemoteSyncSlaveServer:
         state = SlaveState(root, password)
-        server = AgentFTPSlaveServer(("127.0.0.1", 0), state)
+        server = AgentRemoteSyncSlaveServer(("127.0.0.1", 0), state)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server
 
@@ -34,7 +34,7 @@ class AgentFTPTests(unittest.TestCase):
             try:
                 client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
                 client.mkdir("/incoming")
-                payload = (b"agentFTP-resume-test-" * 1024) + b"end"
+                payload = (b"agent-remote-sync-resume-test-" * 1024) + b"end"
                 digest = hashlib.sha256(payload).hexdigest()
                 client.upload_chunk(
                     "/incoming/data.bin", 0, len(payload), payload[:1234], overwrite=False
@@ -69,7 +69,7 @@ class AgentFTPTests(unittest.TestCase):
             master = None
             try:
                 client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
-                master = AgentFTPMasterServer(
+                master = AgentRemoteSyncMasterServer(
                     ("127.0.0.1", 0), MasterState(local_root, client)
                 )
                 threading.Thread(target=master.serve_forever, daemon=True).start()

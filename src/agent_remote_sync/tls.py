@@ -12,7 +12,7 @@ from urllib.request import HTTPSHandler, Request, build_opener, urlopen
 
 import http.client
 
-from .common import AgentFTPError
+from .common import AgentRemoteSyncError
 from .connections import config_home
 
 
@@ -25,8 +25,8 @@ class TLSFiles:
 
 def ensure_self_signed_cert(root: Path, *, store_dir: Path | None = None) -> TLSFiles:
     directory = store_dir or default_cert_dir(root)
-    cert_file = directory / "agentftp-slave-cert.pem"
-    key_file = directory / "agentftp-slave-key.pem"
+    cert_file = directory / "agent-remote-sync-slave-cert.pem"
+    key_file = directory / "agent-remote-sync-slave-key.pem"
     if cert_file.exists() and key_file.exists():
         return TLSFiles(cert_file, key_file, certificate_fingerprint(cert_file))
     directory.mkdir(parents=True, exist_ok=True)
@@ -46,7 +46,7 @@ def generate_self_signed_cert(cert_file: Path, key_file: Path) -> None:
         from cryptography.hazmat.primitives.asymmetric import rsa
         from cryptography.x509.oid import NameOID
     except ImportError as exc:
-        raise AgentFTPError(
+        raise AgentRemoteSyncError(
             500,
             "missing_tls_dependency",
             "cryptography is required to generate self-signed TLS certificates",
@@ -55,8 +55,8 @@ def generate_self_signed_cert(cert_file: Path, key_file: Path) -> None:
     key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     subject = issuer = x509.Name(
         [
-            x509.NameAttribute(NameOID.COMMON_NAME, "agentFTP self-signed slave"),
-            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "agentFTP"),
+            x509.NameAttribute(NameOID.COMMON_NAME, "agent-remote-sync self-signed slave"),
+            x509.NameAttribute(NameOID.ORGANIZATION_NAME, "agent-remote-sync"),
         ]
     )
     alt_names = [
@@ -106,7 +106,7 @@ def certificate_fingerprint(cert_file: Path) -> str:
 def normalize_fingerprint(value: str) -> str:
     cleaned = "".join(ch for ch in value.lower() if ch in "0123456789abcdef")
     if len(cleaned) != 64:
-        raise AgentFTPError(400, "bad_tls_fingerprint", "TLS fingerprint must be a SHA-256 hex value")
+        raise AgentRemoteSyncError(400, "bad_tls_fingerprint", "TLS fingerprint must be a SHA-256 hex value")
     return cleaned
 
 
@@ -122,10 +122,10 @@ def is_https_endpoint(host: str) -> bool:
 def fetch_remote_fingerprint(host: str, port: int, timeout: float = 10) -> str:
     parsed = urlparse(host if "://" in host else f"https://{host}:{port}")
     if parsed.scheme != "https":
-        raise AgentFTPError(400, "not_https", "TLS fingerprint can only be fetched for HTTPS endpoints")
+        raise AgentRemoteSyncError(400, "not_https", "TLS fingerprint can only be fetched for HTTPS endpoints")
     hostname = parsed.hostname
     if not hostname:
-        raise AgentFTPError(400, "bad_https_host", "HTTPS host is missing")
+        raise AgentRemoteSyncError(400, "bad_https_host", "HTTPS host is missing")
     resolved_port = parsed.port or port or 443
     context = ssl._create_unverified_context()
     with socket.create_connection((hostname, resolved_port), timeout=timeout) as sock:

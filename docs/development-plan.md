@@ -1,4 +1,4 @@
-# agentFTP v1 Development Plan
+﻿# agent-remote-sync v1 Development Plan
 
 ## Product Goal
 
@@ -6,9 +6,9 @@ Build the multi-host transport extension for agent-work-mem: an OS-neutral
 transfer and handoff tool that agents can install from GitHub and run with
 natural commands:
 
-- "Install agentFTP from GitHub."
-- "Run agentFTP slave mode."
-- "Run agentFTP master mode with this IP, port, and password."
+- "Install agent-remote-sync from GitHub."
+- "Run agent-remote-sync slave mode."
+- "Run agent-remote-sync master mode with this IP, port, and password."
 
 ## Confirmed v1 Scope
 
@@ -27,7 +27,7 @@ natural commands:
 - Saved connection aliases: authenticate once, then use short names such as
   `lab` or `build-server`.
 - Instruction inbox: send task-only or file-plus-task handoffs.
-- agentFTP is the product/CLI name; the project category is
+- agent-remote-sync is the product/CLI name; the project category is
   agent-work-mem multi-host handoff transport.
 
 ## Implementation Phases
@@ -36,7 +36,7 @@ natural commands:
 
 - Python package scaffold for fast iteration and easy `pipx` install from
   GitHub.
-- CLI entrypoint: `agentftp`.
+- CLI entrypoint: `agent-remote-sync`.
 - Docs: README, protocol, security, prompt guide.
 
 ### Phase 1: Functional Prototype
@@ -46,7 +46,7 @@ natural commands:
 - Master local browser UI served from `127.0.0.1`.
 - Remote/local two-pane file browser.
 - Upload/download/delete/rename/mkdir/move.
-- Sequential chunk upload/download with `.agentftp_partial` resume state.
+- Sequential chunk upload/download with `.agent_remote_sync_partial` resume state.
 
 ### Phase 2: v1 Hardening
 
@@ -74,30 +74,30 @@ compatible.
 
 ## Headless and Handoff Direction
 
-Headless mode turns agentFTP into a coordination layer, not only a file browser.
+Headless mode turns agent-remote-sync into a coordination layer, not only a file browser.
 
 ### Headless Commands
 
-- `agentftp push <host> <local-path> <remote-dir>`
-- `agentftp pull <host> <remote-path> <local-dir>`
-- `agentftp handoff <host> <local-path> "<task>"`
-- `agentftp sync plan <host> <local-path> <remote-dir>`
-- `agentftp sync push <host> <local-path> <remote-dir>`
-- `agentftp sync pull <host> <remote-dir> <local-path>`
+- `agent-remote-sync push <host> <local-path> <remote-dir>`
+- `agent-remote-sync pull <host> <remote-path> <local-dir>`
+- `agent-remote-sync handoff <host> <local-path> "<task>"`
+- `agent-remote-sync sync plan <host> <local-path> <remote-dir>`
+- `agent-remote-sync sync push <host> <local-path> <remote-dir>`
+- `agent-remote-sync sync pull <host> <remote-dir> <local-path>`
 
 Default conflict behavior remains safe: abort and report conflicts unless the
 caller explicitly confirms overwrite.
 
 ### Handoff Commands
 
-- `agentftp tell <host> "<task>"` sends instruction-only handoff.
-- `agentftp handoff <host> <local-path> "<task>"` pushes files and sends the
+- `agent-remote-sync tell <host> "<task>"` sends instruction-only handoff.
+- `agent-remote-sync handoff <host> <local-path> "<task>"` pushes files and sends the
   handoff in one command.
-- `agentftp inbox --claim <instruction-id>` claims received work.
-- `agentftp worker --once` dry-runs one received autoRun handoff.
-- `agentftp worker --once --execute ask` executes explicit `agentftp-run:`
+- `agent-remote-sync inbox --claim <instruction-id>` claims received work.
+- `agent-remote-sync worker --once` dry-runs one received autoRun handoff.
+- `agent-remote-sync worker --once --execute ask` executes explicit `agent-remote-sync-run:`
   command lines after approval.
-- `agentftp report <host> <handoff-id> "<result>"` sends a STATUS_REPORT back.
+- `agent-remote-sync report <host> <handoff-id> "<result>"` sends a STATUS_REPORT back.
 
 A handoff is a folder plus a manifest:
 
@@ -120,7 +120,7 @@ Implemented worker primitives:
 
 - received instruction claim states: `received -> claimed -> completed/failed/blocked`
 - worker dry-run plan stored in the inbox manifest
-- explicit command execution through `agentftp-run:` lines only
+- explicit command execution through `agent-remote-sync-run:` lines only
 - local STATUS_REPORT generation
 - optional callback report delivery through a receiver-side saved alias
 
@@ -136,8 +136,8 @@ Still planned:
 
 Implemented v0.1 TLS primitives:
 
-- `agentftp slave --tls self-signed`
-- `agentftp slave --tls manual --cert-file ... --key-file ...`
+- `agent-remote-sync slave --tls self-signed`
+- `agent-remote-sync slave --tls manual --cert-file ... --key-file ...`
 - HTTPS clients with system CA verification, CA file override, fingerprint
   pinning, or explicit insecure test mode
 - saved connection fingerprint reuse

@@ -143,7 +143,7 @@ def check_agent_work_mem(root: Path) -> BootstrapCheck:
 
 def check_agent_runtime() -> BootstrapCheck:
     markers = []
-    for name in ("CODEX_HOME", "CURSOR_TRACE_ID", "AIDER_MODEL", "AGENTFTP_AGENT"):
+    for name in ("CODEX_HOME", "CURSOR_TRACE_ID", "AIDER_MODEL", "AGENT_REMOTE_SYNC_AGENT"):
         import os
 
         if os.environ.get(name):
@@ -234,7 +234,7 @@ def git_install_commands() -> list[list[str]]:
 
 
 def format_summary(summary: BootstrapSummary) -> str:
-    lines = ["agentFTP bootstrap"]
+    lines = ["agent-remote-sync bootstrap"]
     for check in summary.checks:
         mark = "OK" if check.ok else ("MISSING" if check.required else "WARN")
         requirement = "required" if check.required else "optional"

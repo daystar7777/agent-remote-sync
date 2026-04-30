@@ -1,0 +1,504 @@
+﻿<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agent-remote-sync Dashboard</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f5f7fb;
+      --panel: #ffffff;
+      --line: #d8dee8;
+      --text: #172033;
+      --muted: #667085;
+      --blue: #2563eb;
+      --green: #16803c;
+      --red: #c93636;
+      --amber: #a76008;
+      --select: #eaf1ff;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--bg);
+      color: var(--text);
+      letter-spacing: 0;
+    }
+
+    header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      padding: 18px 24px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    h1, h2, h3, p { margin: 0; }
+
+    h1 { font-size: 20px; font-weight: 720; }
+    h2 { font-size: 14px; font-weight: 720; }
+    h3 { font-size: 13px; font-weight: 720; }
+
+    button {
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--text);
+      padding: 8px 11px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: var(--blue);
+      background: var(--blue);
+      color: #fff;
+    }
+
+    button.danger {
+      border-color: #efb3b3;
+      color: var(--red);
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(360px, 0.7fr);
+      gap: 16px;
+      padding: 16px;
+      height: calc(100vh - 70px);
+      min-height: 0;
+    }
+
+    .stack {
+      display: grid;
+      gap: 16px;
+      min-height: 0;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      min-width: 0;
+    }
+
+    .panel-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: center;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .content {
+      padding: 12px 14px;
+      min-width: 0;
+    }
+
+    .overview {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .metric {
+      border: 1px solid var(--line);
+      background: #fff;
+      padding: 12px;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric strong {
+      display: block;
+      margin-top: 6px;
+      font-size: 21px;
+    }
+
+    .grid-list {
+      display: grid;
+      gap: 8px;
+      max-height: 34vh;
+      overflow: auto;
+    }
+
+    .item {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      border: 1px solid var(--line);
+      padding: 10px;
+      background: #fff;
+    }
+
+    .item.selected { background: var(--select); border-color: #9bbcff; }
+
+    .title-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .title-row strong,
+    .path,
+    .meta,
+    .log-line {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .path, .meta, .log-line {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      min-height: 20px;
+      padding: 2px 7px;
+      border: 1px solid var(--line);
+      font-size: 12px;
+      color: var(--muted);
+      background: #fff;
+    }
+
+    .badge.running, .badge.connected, .badge.completed, .badge.done {
+      border-color: #a7dfb8;
+      color: var(--green);
+      background: #f0fbf3;
+    }
+
+    .badge.stale, .badge.saved, .badge.received, .badge.claimed {
+      border-color: #f0cf9c;
+      color: var(--amber);
+      background: #fff8ea;
+    }
+
+    .badge.error, .badge.failed, .badge.stopped {
+      border-color: #efb3b3;
+      color: var(--red);
+      background: #fff1f1;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    th, td {
+      padding: 8px 6px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+
+    th { color: var(--muted); font-size: 12px; font-weight: 650; }
+
+    .detail {
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .detail-body {
+      display: grid;
+      gap: 14px;
+      overflow: auto;
+      padding: 14px;
+      min-height: 0;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 13px;
+      padding: 14px;
+      border: 1px dashed var(--line);
+      background: #fbfcff;
+    }
+
+    @media (max-width: 920px) {
+      main {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+
+      .overview {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>agent-remote-sync Dashboard</h1>
+      <p class="meta" id="updated">Loading</p>
+    </div>
+    <button class="primary" id="refresh" type="button">Refresh</button>
+  </header>
+  <main>
+    <section class="stack">
+      <div class="overview" id="overview"></div>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Channels</h2>
+        </div>
+        <div class="content grid-list" id="channels"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Processes</h2>
+        </div>
+        <div class="content">
+          <table>
+            <thead>
+              <tr><th>Role</th><th>Name</th><th>Status</th><th>Port</th><th>Project</th><th></th></tr>
+            </thead>
+            <tbody id="instances"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h2>Latest Data</h2>
+        </div>
+        <div class="content grid-list" id="latest"></div>
+      </section>
+    </section>
+
+    <aside class="panel detail">
+      <div class="panel-head">
+        <h2>Details</h2>
+      </div>
+      <div class="detail-body" id="detail">
+        <div class="empty">Select a process or channel.</div>
+      </div>
+    </aside>
+  </main>
+
+  <script>
+    const state = { data: null, selectedInstance: "" };
+
+    async function api(url, options = {}) {
+      const response = await fetch(url, {
+        headers: { "Content-Type": "application/json" },
+        ...options
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || data.error || response.statusText);
+      return data;
+    }
+
+    async function load() {
+      state.data = await api("/api/status");
+      render();
+    }
+
+    function render() {
+      const data = state.data;
+      document.getElementById("updated").textContent = `Updated ${formatTime(data.generatedAt)}`;
+      renderOverview(data);
+      renderChannels(data.channels || []);
+      renderInstances(data.instances || []);
+      renderLatest(data.projects || []);
+      if (state.selectedInstance) renderInstanceDetail(state.selectedInstance);
+    }
+
+    function renderOverview(data) {
+      const running = (data.instances || []).filter((item) => item.status === "running").length;
+      const masters = (data.instances || []).filter((item) => item.role === "master").length;
+      const slaves = (data.instances || []).filter((item) => item.role === "slave").length;
+      const transfers = (data.projects || []).reduce((sum, item) => sum + (item.transfers || []).length, 0);
+      document.getElementById("overview").innerHTML = [
+        metric("Running", running),
+        metric("Masters", masters),
+        metric("Slaves", slaves),
+        metric("Recent transfers", transfers)
+      ].join("");
+    }
+
+    function metric(label, value) {
+      return `<div class="metric"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong></div>`;
+    }
+
+    function renderChannels(channels) {
+      const host = document.getElementById("channels");
+      host.innerHTML = channels.map((channel) => `
+        <div class="item" data-channel="${escapeAttr(channel.alias)}">
+          <div>
+            <div class="title-row">
+              <strong>${escapeHtml(channel.alias)}</strong>
+              <span class="badge ${escapeAttr(channel.status)}">${escapeHtml(channel.status)}</span>
+            </div>
+            <div class="path">${escapeHtml(channel.host)}:${escapeHtml(channel.port)}</div>
+            <div class="meta">${channel.masters.length} master(s), ${channel.slaves.length} slave(s)</div>
+          </div>
+          <button type="button" data-channel-detail="${escapeAttr(channel.alias)}">Details</button>
+        </div>
+      `).join("") || `<div class="empty">No saved channels.</div>`;
+      host.querySelectorAll("button[data-channel-detail]").forEach((button) => {
+        button.onclick = () => renderChannelDetail(button.dataset.channelDetail);
+      });
+    }
+
+    function renderInstances(instances) {
+      const host = document.getElementById("instances");
+      host.innerHTML = instances.map((item) => `
+        <tr class="${item.id === state.selectedInstance ? "selected" : ""}">
+          <td>${escapeHtml(item.role)}</td>
+          <td>
+            <strong>${escapeHtml(item.name || item.id)}</strong>
+            <div class="meta">pid ${escapeHtml(item.pid)}</div>
+          </td>
+          <td><span class="badge ${escapeAttr(item.status)}">${escapeHtml(item.status)}</span></td>
+          <td>${escapeHtml(item.port || "")}</td>
+          <td><div class="path" title="${escapeAttr(item.root || "")}">${escapeHtml(item.root || "")}</div></td>
+          <td>
+            <button type="button" data-detail="${escapeAttr(item.id)}">Details</button>
+            ${item.id !== state.data.dashboardId ? `<button class="danger" type="button" data-stop="${escapeAttr(item.id)}">Stop</button>` : ""}
+          </td>
+        </tr>
+      `).join("") || `<tr><td colspan="6">No running processes.</td></tr>`;
+      host.querySelectorAll("button[data-detail]").forEach((button) => {
+        button.onclick = () => renderInstanceDetail(button.dataset.detail);
+      });
+      host.querySelectorAll("button[data-stop]").forEach((button) => {
+        button.onclick = () => stopProcess(button.dataset.stop);
+      });
+    }
+
+    function renderLatest(projects) {
+      const rows = [];
+      for (const project of projects) {
+        if (project.latestTransfer) {
+          rows.push(`<div class="item"><div>
+            <div class="title-row"><strong>${escapeHtml(project.name)}</strong><span class="badge ${escapeAttr(project.latestTransfer.status)}">${escapeHtml(project.latestTransfer.status)}</span></div>
+            <div class="path">${escapeHtml(project.latestTransfer.kind)} ${formatBytes(project.latestTransfer.doneBytes || 0)} / ${formatBytes(project.latestTransfer.totalBytes || 0)}</div>
+            <div class="meta">${formatTime(project.latestTransfer.updatedAt || project.latestTransfer.startedAt)}</div>
+          </div></div>`);
+        }
+        if (project.latestHandoff) {
+          rows.push(`<div class="item"><div>
+            <div class="title-row"><strong>${escapeHtml(project.latestHandoff.title || project.latestHandoff.filename)}</strong><span class="badge ${escapeAttr(project.latestHandoff.direction || "handoff")}">${escapeHtml(project.latestHandoff.type || "handoff")}</span></div>
+            <div class="path">${escapeHtml(project.name)} - ${escapeHtml(project.latestHandoff.path || "")}</div>
+            <div class="meta">${escapeHtml(project.latestHandoff.summary || "")}</div>
+          </div></div>`);
+        }
+      }
+      document.getElementById("latest").innerHTML = rows.join("") || `<div class="empty">No recent transfers or handoffs.</div>`;
+    }
+
+    async function renderInstanceDetail(id) {
+      state.selectedInstance = id;
+      const data = await api(`/api/instances/${encodeURIComponent(id)}/detail`);
+      const instance = data.instance;
+      const project = data.project;
+      document.getElementById("detail").innerHTML = `
+        <section>
+          <h3>${escapeHtml(instance.name || instance.id)}</h3>
+          <div class="meta">${escapeHtml(instance.role)} - pid ${escapeHtml(instance.pid)} - port ${escapeHtml(instance.port || "")}</div>
+          <div class="path">${escapeHtml(instance.root || "")}</div>
+          <div class="split">
+            <div class="metric"><span>Status</span><strong>${escapeHtml(instance.status)}</strong></div>
+            <div class="metric"><span>Started</span><strong>${escapeHtml(formatTime(instance.startedAt))}</strong></div>
+          </div>
+        </section>
+        ${renderProjectDetail(project)}
+      `;
+    }
+
+    function renderChannelDetail(alias) {
+      const channel = (state.data.channels || []).find((item) => item.alias === alias);
+      if (!channel) return;
+      const linked = (state.data.instances || []).filter((item) => channel.masters.includes(item.id) || channel.slaves.includes(item.id));
+      document.getElementById("detail").innerHTML = `
+        <section>
+          <h3>${escapeHtml(channel.alias)}</h3>
+          <div class="meta">${escapeHtml(channel.status)} - ${escapeHtml(channel.host)}:${escapeHtml(channel.port)}</div>
+        </section>
+        <section>
+          <h3>Linked Processes</h3>
+          ${linked.map((item) => `<div class="log-line">${escapeHtml(item.role)} ${escapeHtml(item.id)} ${escapeHtml(item.root)}</div>`).join("") || `<div class="empty">No active process for this channel.</div>`}
+        </section>
+      `;
+    }
+
+    function renderProjectDetail(project) {
+      return `
+        <section>
+          <h3>Transfers</h3>
+          ${project.transfers.map((item) => `<div class="log-line">${escapeHtml(item.id)} - ${escapeHtml(item.kind)} - ${escapeHtml(item.status)} - ${formatBytes(item.doneBytes || 0)} / ${formatBytes(item.totalBytes || 0)}</div>`).join("") || `<div class="empty">No transfer sessions.</div>`}
+        </section>
+        <section>
+          <h3>Handoffs</h3>
+          ${project.handoffs.map((item) => `<div class="log-line">${escapeHtml(item.type || "handoff")} - ${escapeHtml(item.title || item.filename)} - ${escapeHtml(item.direction || "")}</div>`).join("") || `<div class="empty">No handoff files.</div>`}
+        </section>
+        <section>
+          <h3>Inbox</h3>
+          ${project.instructions.map((item) => `<div class="log-line">${escapeHtml(item.id)} - ${escapeHtml(item.state)} - ${escapeHtml(item.task || "")}</div>`).join("") || `<div class="empty">No received instructions.</div>`}
+        </section>
+      `;
+    }
+
+    async function stopProcess(id) {
+      const item = (state.data.instances || []).find((entry) => entry.id === id);
+      const label = item ? `${item.role} ${item.name || item.id}` : id;
+      if (!confirm(`Stop ${label}? Active transfers may be interrupted.`)) return;
+      await api(`/api/instances/${encodeURIComponent(id)}/stop`, {
+        method: "POST",
+        body: JSON.stringify({ confirm: true })
+      });
+      await load();
+    }
+
+    function formatBytes(value) {
+      let amount = Number(value || 0);
+      for (const suffix of ["B", "KB", "MB", "GB", "TB"]) {
+        if (amount < 1024 || suffix === "TB") return suffix === "B" ? `${amount} ${suffix}` : `${amount.toFixed(1)} ${suffix}`;
+        amount /= 1024;
+      }
+    }
+
+    function formatTime(value) {
+      if (!value) return "";
+      return new Date(value * 1000).toLocaleString();
+    }
+
+    function escapeHtml(value) {
+      return String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
+    }
+
+    function escapeAttr(value) {
+      return escapeHtml(value);
+    }
+
+    document.getElementById("refresh").onclick = () => load().catch((error) => alert(error.message));
+    load().catch((error) => alert(error.message));
+    setInterval(() => load().catch(() => {}), 5000);
+  </script>
+</body>
+</html>

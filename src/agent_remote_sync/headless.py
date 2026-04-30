@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .common import (
     CHUNK_SIZE,
-    AgentFTPError,
+    AgentRemoteSyncError,
     clean_rel_path,
     console_print,
     ensure_storage_available,
@@ -81,10 +81,10 @@ def push(
             digest = sha256_file(source)
             status = remote.upload_status(item["target"], item["size"])
             if status.get("exists") and not overwrite:
-                raise AgentFTPError(409, "exists", f"Remote file exists: {item['target']}")
+                raise AgentRemoteSyncError(409, "exists", f"Remote file exists: {item['target']}")
             offset = int(status.get("partialSize", 0))
             if offset > item["size"]:
-                raise AgentFTPError(409, "bad_partial", f"Remote partial is larger than source: {item['target']}")
+                raise AgentRemoteSyncError(409, "bad_partial", f"Remote partial is larger than source: {item['target']}")
             logger.file_started(item["source"], item["target"], item["size"], resume_offset=offset)
             done += offset
             with source.open("rb") as handle:
@@ -198,7 +198,7 @@ def pull(
             target = resolve_path(local_root, item["target"], allow_missing=True)
             console_print(f"download {item['source']} -> {item['target']}")
             if target.exists() and not overwrite:
-                raise AgentFTPError(409, "exists", f"Local file exists: {item['target']}")
+                raise AgentRemoteSyncError(409, "exists", f"Local file exists: {item['target']}")
             part, meta = partial_paths(local_root, item["target"])
             offset = part.stat().st_size if part.exists() else 0
             if offset > item["size"]:
@@ -212,16 +212,16 @@ def pull(
                     length = min(CHUNK_SIZE, item["size"] - current_offset)
                     chunk = remote.download_chunk(item["source"], current_offset, length)
                     if not chunk:
-                        raise AgentFTPError(502, "empty_chunk", "Remote returned an empty chunk")
+                        raise AgentRemoteSyncError(502, "empty_chunk", "Remote returned an empty chunk")
                     handle.write(chunk)
                     current_offset += len(chunk)
                     done += len(chunk)
                     print_progress(done, total)
             if part.stat().st_size != item["size"]:
-                raise AgentFTPError(400, "size_mismatch", f"Downloaded size mismatch: {item['target']}")
+                raise AgentRemoteSyncError(400, "size_mismatch", f"Downloaded size mismatch: {item['target']}")
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists() and not overwrite:
-                raise AgentFTPError(409, "exists", f"Local file exists: {item['target']}")
+                raise AgentRemoteSyncError(409, "exists", f"Local file exists: {item['target']}")
             part.replace(target)
             if meta.exists():
                 meta.unlink()
@@ -275,9 +275,9 @@ def tell(
     root = (local_root or Path.cwd()).resolve()
     handoff = create_handoff(
         root,
-        title=task[:60] or "agentFTP handoff",
+        title=task[:60] or "agent-remote-sync handoff",
         task=task,
-        from_model=from_name or "agentftp-local",
+        from_model=from_name or "agent-remote-sync-local",
         to_model=to_name,
         message_type="DECISION_RELAY",
         paths=paths or [],
@@ -403,7 +403,7 @@ def report(
         root,
         title=f"Report for {parent_id}",
         task=report_text,
-        from_model=from_name or "agentftp-local",
+        from_model=from_name or "agent-remote-sync-local",
         to_model=to_name,
         message_type="STATUS_REPORT",
         paths=paths or [],
@@ -452,7 +452,7 @@ def local_scope(path: Path, root: Path | None = None) -> tuple[Path, str]:
     base = (root or Path.cwd()).resolve()
     target = path.resolve() if path.is_absolute() else (base / path).resolve()
     if not target.exists():
-        raise AgentFTPError(404, "not_found", f"Local path not found: {path}")
+        raise AgentRemoteSyncError(404, "not_found", f"Local path not found: {path}")
     try:
         rel = target.relative_to(base)
         agent_path = "/" if rel.as_posix() == "." else "/" + rel.as_posix()
@@ -472,13 +472,13 @@ def resolve_conflicts(conflicts: list[str], overwrite: bool, side: str) -> bool:
     if len(conflicts) > 20:
         console_print(f"- ... and {len(conflicts) - 20} more")
     if not sys.stdin.isatty():
-        raise AgentFTPError(409, "conflicts", "Conflicts found; rerun with --overwrite")
+        raise AgentRemoteSyncError(409, "conflicts", "Conflicts found; rerun with --overwrite")
     try:
         answer = input("Overwrite these files? [y/N] ").strip().lower()
     except EOFError as exc:
-        raise AgentFTPError(409, "conflicts", "Conflicts found; rerun with --overwrite") from exc
+        raise AgentRemoteSyncError(409, "conflicts", "Conflicts found; rerun with --overwrite") from exc
     if answer not in ("y", "yes"):
-        raise AgentFTPError(409, "conflicts", "Transfer cancelled because of conflicts")
+        raise AgentRemoteSyncError(409, "conflicts", "Transfer cancelled because of conflicts")
     return True
 
 

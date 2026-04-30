@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .common import AgentFTPError, clean_rel_path, resolve_path
+from .common import AgentRemoteSyncError, clean_rel_path, resolve_path
 from .connections import get_connection
 from .handoff import create_handoff
 from .headless import report as send_report
@@ -56,7 +56,7 @@ def run_worker_once(
     execute: str = "never",
     include_manual: bool = False,
     report_to: str = "",
-    from_name: str = "agentftp-worker",
+    from_name: str = "agent-remote-sync-worker",
     timeout: int = 600,
 ) -> dict[str, Any]:
     root = root.resolve()
@@ -118,7 +118,7 @@ def run_worker_loop(
     execute: str = "never",
     include_manual: bool = False,
     report_to: str = "",
-    from_name: str = "agentftp-worker",
+    from_name: str = "agent-remote-sync-worker",
     timeout: int = 600,
     interval: float = 5.0,
     max_iterations: int | None = None,
@@ -142,7 +142,7 @@ def run_worker_loop(
                 )
                 processed += 1
                 results.append(result)
-            except AgentFTPError as exc:
+            except AgentRemoteSyncError as exc:
                 if exc.code != "no_runnable_instruction":
                     raise
                 idle += 1
@@ -171,14 +171,14 @@ def select_instruction(root: Path, *, instruction_id: str = "", include_manual: 
         manifest = read_instruction(root, instruction_id)
         state = str(manifest.get("state", "received"))
         if state not in ("received", "claimed"):
-            raise AgentFTPError(409, "instruction_not_runnable", f"Instruction is already {state}")
+            raise AgentRemoteSyncError(409, "instruction_not_runnable", f"Instruction is already {state}")
         if not manifest.get("autoRun") and not include_manual:
-            raise AgentFTPError(409, "manual_instruction", "Instruction is not marked autoRun")
+            raise AgentRemoteSyncError(409, "manual_instruction", "Instruction is not marked autoRun")
         return manifest
     for manifest in list_instructions(root):
         if manifest.get("state") == "received" and (manifest.get("autoRun") or include_manual):
             return manifest
-    raise AgentFTPError(404, "no_runnable_instruction", "No received autoRun instruction is available")
+    raise AgentRemoteSyncError(404, "no_runnable_instruction", "No received autoRun instruction is available")
 
 
 def build_plan(root: Path, manifest: dict[str, Any]) -> dict[str, Any]:
@@ -212,7 +212,7 @@ def extract_commands(manifest: dict[str, Any]) -> list[str]:
         commands.extend(str(command).strip() for command in raw_commands if str(command).strip())
     for line in str(manifest.get("task", "")).splitlines():
         stripped = line.strip()
-        if stripped.lower().startswith("agentftp-run:"):
+        if stripped.lower().startswith("agent-remote-sync-run:"):
             command = stripped.split(":", 1)[1].strip()
             if command:
                 commands.append(command)
@@ -245,19 +245,19 @@ def approve_execution(execute: str, plan: dict[str, Any]) -> None:
     if execute == "yes":
         return
     if execute != "ask":
-        raise AgentFTPError(400, "bad_execute_mode", "execute must be never, ask, or yes")
+        raise AgentRemoteSyncError(400, "bad_execute_mode", "execute must be never, ask, or yes")
     if not sys.stdin.isatty():
-        raise AgentFTPError(409, "execution_needs_approval", "Execution approval requires an interactive terminal")
-    answer = input("Run these agentftp-run commands? [y/N] ").strip().lower()
+        raise AgentRemoteSyncError(409, "execution_needs_approval", "Execution approval requires an interactive terminal")
+    answer = input("Run these agent-remote-sync-run commands? [y/N] ").strip().lower()
     if answer not in ("y", "yes"):
-        raise AgentFTPError(409, "execution_cancelled", "Worker execution was cancelled")
+        raise AgentRemoteSyncError(409, "execution_cancelled", "Worker execution was cancelled")
 
 
 def execute_commands(root: Path, commands: list[str], *, timeout: int) -> list[CommandResult]:
     results = []
     for command in commands:
         if is_blocked_command(command):
-            raise AgentFTPError(403, "blocked_command", f"Command is blocked by policy: {command}")
+            raise AgentRemoteSyncError(403, "blocked_command", f"Command is blocked by policy: {command}")
         started = time.time()
         completed = subprocess.run(
             command,
@@ -288,7 +288,7 @@ def finish_without_execution(
     report_to: str,
     from_name: str,
 ) -> dict[str, Any]:
-    reason = "No explicit agentftp-run commands were provided."
+    reason = "No explicit agent-remote-sync-run commands were provided."
     if plan["blockedCommands"]:
         reason = "One or more commands were blocked by the worker safety policy."
     report_text = render_report(manifest, plan, state, [], note=reason)
@@ -313,7 +313,7 @@ def deliver_report(
     report_text: str,
     *,
     report_to: str = "",
-    from_name: str = "agentftp-worker",
+    from_name: str = "agent-remote-sync-worker",
 ) -> dict[str, Any]:
     alias = report_to or str(manifest.get("callbackAlias", ""))
     parent_id = str(manifest.get("handoffId") or manifest.get("id", ""))
@@ -366,7 +366,7 @@ def render_report(
     note: str = "",
 ) -> str:
     lines = [
-        f"agentFTP worker finished instruction {manifest.get('id', '')}.",
+        f"agent-remote-sync worker finished instruction {manifest.get('id', '')}.",
         f"State: {state}",
         f"Task: {manifest.get('task', '')}",
     ]

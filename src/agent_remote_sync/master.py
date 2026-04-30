@@ -20,7 +20,7 @@ from .common import (
     CHUNK_SIZE,
     DEFAULT_PORT,
     DEFAULT_UI_PORT,
-    AgentFTPError,
+    AgentRemoteSyncError,
     RESERVED_DIR_NAMES,
     TransferJob,
     clean_rel_path,
@@ -44,6 +44,7 @@ from .common import (
     unb64,
 )
 from .filenames import normalize_disk
+from .registry import mark_instance_stopped, register_instance, start_heartbeat
 from .tls import open_url
 
 
@@ -80,7 +81,7 @@ class RemoteClient:
         elif password is not None:
             self.login(password)
         else:
-            raise AgentFTPError(401, "missing_auth", "Password or token is required")
+            raise AgentRemoteSyncError(401, "missing_auth", "Password or token is required")
 
     def login(self, password: str) -> None:
         challenge = self.request_json("GET", "/api/challenge", auth=False)
@@ -146,7 +147,7 @@ class RemoteClient:
                 if attempt + 1 >= attempts:
                     break
                 time.sleep(min(2.0, 0.25 * (2**attempt)))
-        raise AgentFTPError(502, "remote_unreachable", str(last)) from last
+        raise AgentRemoteSyncError(502, "remote_unreachable", str(last)) from last
 
     def request_bytes(self, path: str) -> bytes:
         request = Request(
@@ -165,7 +166,7 @@ class RemoteClient:
         )
         try:
             raw = self.read_with_retries(request, timeout=120, retryable=True)
-        except AgentFTPError as exc:
+        except AgentRemoteSyncError as exc:
             if exc.code == "offset_mismatch":
                 expected = exc.details.get("expectedOffset")
                 query = parse_qs(urlparse(path).query)
@@ -275,9 +276,10 @@ class RemoteClient:
 
 
 class MasterState:
-    def __init__(self, local_root: Path, remote: RemoteClient):
+    def __init__(self, local_root: Path, remote: RemoteClient, *, alias: str = ""):
         self.local_root = local_root.resolve()
         self.remote = remote
+        self.alias = alias
         self.jobs: dict[str, TransferJob] = {}
         self.plans: dict[str, dict[str, Any]] = {}
         self.lock = threading.Lock()
@@ -297,7 +299,7 @@ class MasterState:
                     job.error = "Transfer was cancelled"
                 else:
                     job.state = "done"
-            except AgentFTPError as exc:
+            except AgentRemoteSyncError as exc:
                 if exc.code == "cancelled":
                     job.state = "cancelled"
                     job.error = exc.message
@@ -317,7 +319,7 @@ class MasterState:
         with self.lock:
             job = self.jobs.get(job_id)
         if job is None:
-            raise AgentFTPError(404, "job_not_found", "Transfer job was not found")
+            raise AgentRemoteSyncError(404, "job_not_found", "Transfer job was not found")
         return job
 
     def cancel_job(self, job_id: str) -> TransferJob:
@@ -344,13 +346,13 @@ class MasterState:
         with self.lock:
             plan = self.plans.get(plan_id)
         if plan is None:
-            raise AgentFTPError(404, "plan_not_found", "Transfer plan was not found")
+            raise AgentRemoteSyncError(404, "plan_not_found", "Transfer plan was not found")
         if plan.get("direction") != direction:
-            raise AgentFTPError(400, "wrong_plan_type", "Transfer plan direction does not match this job")
+            raise AgentRemoteSyncError(400, "wrong_plan_type", "Transfer plan direction does not match this job")
         return dict(plan)
 
 
-class AgentFTPMasterServer(ThreadingHTTPServer):
+class AgentRemoteSyncMasterServer(ThreadingHTTPServer):
     def __init__(self, server_address: tuple[str, int], state: MasterState):
         super().__init__(server_address, MasterHandler)
         self.state = state
@@ -358,7 +360,7 @@ class AgentFTPMasterServer(ThreadingHTTPServer):
 
 
 class MasterHandler(BaseHTTPRequestHandler):
-    server: AgentFTPMasterServer
+    server: AgentRemoteSyncMasterServer
 
     def do_GET(self) -> None:
         try:
@@ -389,7 +391,7 @@ class MasterHandler(BaseHTTPRequestHandler):
                 job_id = parsed.path.removeprefix("/api/jobs/")
                 send_json(self, 200, self.server.state.get_job(job_id).as_dict())
             else:
-                raise AgentFTPError(404, "not_found", "Endpoint not found")
+                raise AgentRemoteSyncError(404, "not_found", "Endpoint not found")
         except Exception as exc:
             send_error(self, exc)
 
@@ -443,7 +445,7 @@ class MasterHandler(BaseHTTPRequestHandler):
                 )
                 send_json(self, 202, job.as_dict())
             else:
-                raise AgentFTPError(404, "not_found", "Endpoint not found")
+                raise AgentRemoteSyncError(404, "not_found", "Endpoint not found")
         except Exception as exc:
             send_error(self, exc)
 
@@ -451,7 +453,7 @@ class MasterHandler(BaseHTTPRequestHandler):
         return
 
     def serve_index(self) -> None:
-        data = files("agentftp.web").joinpath("index.html").read_bytes()
+        data = files("agent_remote_sync.web").joinpath("index.html").read_bytes()
         self.send_response(200)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
@@ -465,14 +467,14 @@ class MasterHandler(BaseHTTPRequestHandler):
             parent = resolve_path(self.server.state.local_root, str(payload.get("parent", "/")))
             target = parent / normalize_disk(safe_name(str(payload.get("name", ""))))
         if target.exists() and not target.is_dir():
-            raise AgentFTPError(409, "exists", "A non-directory already exists there")
+            raise AgentRemoteSyncError(409, "exists", "A non-directory already exists there")
         target.mkdir(parents=True, exist_ok=True)
         send_json(self, 200, {"ok": True, "entry": file_info(self.server.state.local_root, target)})
 
     def handle_local_delete(self, payload: dict[str, Any]) -> None:
         path_text = path_from_payload(payload)
         if clean_rel_path(path_text) == "/":
-            raise AgentFTPError(400, "root_delete", "The local root cannot be deleted")
+            raise AgentRemoteSyncError(400, "root_delete", "The local root cannot be deleted")
         target = resolve_path(self.server.state.local_root, path_text)
         if target.is_dir() and not target.is_symlink():
             shutil.rmtree(target)
@@ -483,26 +485,26 @@ class MasterHandler(BaseHTTPRequestHandler):
     def handle_local_rename(self, payload: dict[str, Any]) -> None:
         path_text = path_from_payload(payload)
         if clean_rel_path(path_text) == "/":
-            raise AgentFTPError(400, "root_rename", "The local root cannot be renamed")
+            raise AgentRemoteSyncError(400, "root_rename", "The local root cannot be renamed")
         target = resolve_path(self.server.state.local_root, path_text)
         new_name = normalize_disk(safe_name(str(payload.get("newName", ""))))
         destination = target.with_name(new_name)
         if destination.exists():
-            raise AgentFTPError(409, "exists", "Destination already exists")
+            raise AgentRemoteSyncError(409, "exists", "Destination already exists")
         target.rename(destination)
         send_json(self, 200, {"ok": True, "entry": file_info(self.server.state.local_root, destination)})
 
     def handle_local_move(self, payload: dict[str, Any]) -> None:
         path_text = path_from_payload(payload)
         if clean_rel_path(path_text) == "/":
-            raise AgentFTPError(400, "root_move", "The local root cannot be moved")
+            raise AgentRemoteSyncError(400, "root_move", "The local root cannot be moved")
         target = resolve_path(self.server.state.local_root, path_text)
         destination_dir = resolve_path(self.server.state.local_root, str(payload.get("destDir", "/")))
         if not destination_dir.is_dir():
-            raise AgentFTPError(400, "not_directory", "Destination is not a directory")
+            raise AgentRemoteSyncError(400, "not_directory", "Destination is not a directory")
         destination = destination_dir / target.name
         if destination.exists():
-            raise AgentFTPError(409, "exists", "Destination already exists")
+            raise AgentRemoteSyncError(409, "exists", "Destination already exists")
         shutil.move(str(target), str(destination))
         send_json(self, 200, {"ok": True, "entry": file_info(self.server.state.local_root, destination)})
 
@@ -564,7 +566,7 @@ class MasterHandler(BaseHTTPRequestHandler):
         if required_bytes:
             ensure_storage_available(plan["destinationStorage"], required_bytes, "remote destination")
         if plan["conflicts"] and not overwrite:
-            raise AgentFTPError(409, "exists", "Remote file exists and overwrite was not confirmed")
+            raise AgentRemoteSyncError(409, "exists", "Remote file exists and overwrite was not confirmed")
         for directory in plan["dirs"]:
             job.raise_if_cancelled()
             self.server.state.remote.mkdir(directory)
@@ -575,10 +577,10 @@ class MasterHandler(BaseHTTPRequestHandler):
             digest = sha256_file(source)
             status = self.server.state.remote.upload_status(item["target"], item["size"])
             if status.get("exists") and not overwrite:
-                raise AgentFTPError(409, "exists", f"Remote file exists: {item['target']}")
+                raise AgentRemoteSyncError(409, "exists", f"Remote file exists: {item['target']}")
             offset = int(status.get("partialSize", 0))
             if offset > item["size"]:
-                raise AgentFTPError(409, "bad_partial", f"Remote partial is larger than source: {item['target']}")
+                raise AgentRemoteSyncError(409, "bad_partial", f"Remote partial is larger than source: {item['target']}")
             job.done_bytes += offset
             with source.open("rb") as handle:
                 handle.seek(offset)
@@ -613,7 +615,7 @@ class MasterHandler(BaseHTTPRequestHandler):
         if required_bytes:
             ensure_storage_available(plan["destinationStorage"], required_bytes, "local destination")
         if plan["conflicts"] and not overwrite:
-            raise AgentFTPError(409, "exists", "Local file exists and overwrite was not confirmed")
+            raise AgentRemoteSyncError(409, "exists", "Local file exists and overwrite was not confirmed")
         for directory in plan["dirs"]:
             job.raise_if_cancelled()
             resolve_path(self.server.state.local_root, directory, allow_missing=True).mkdir(
@@ -624,7 +626,7 @@ class MasterHandler(BaseHTTPRequestHandler):
             job.current = f"{item['source']} -> {item['target']}"
             target = resolve_path(self.server.state.local_root, item["target"], allow_missing=True)
             if target.exists() and not overwrite:
-                raise AgentFTPError(409, "exists", f"Local file exists: {item['target']}")
+                raise AgentRemoteSyncError(409, "exists", f"Local file exists: {item['target']}")
             part, meta = partial_paths(self.server.state.local_root, item["target"])
             offset = part.stat().st_size if part.exists() else 0
             if offset > item["size"]:
@@ -640,15 +642,15 @@ class MasterHandler(BaseHTTPRequestHandler):
                         item["source"], current_offset, length
                     )
                     if not chunk:
-                        raise AgentFTPError(502, "empty_chunk", "Remote returned an empty chunk")
+                        raise AgentRemoteSyncError(502, "empty_chunk", "Remote returned an empty chunk")
                     handle.write(chunk)
                     current_offset += len(chunk)
                     job.done_bytes += len(chunk)
             if part.stat().st_size != item["size"]:
-                raise AgentFTPError(400, "size_mismatch", f"Downloaded size mismatch: {item['target']}")
+                raise AgentRemoteSyncError(400, "size_mismatch", f"Downloaded size mismatch: {item['target']}")
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists() and not overwrite:
-                raise AgentFTPError(409, "exists", f"Local file exists: {item['target']}")
+                raise AgentRemoteSyncError(409, "exists", f"Local file exists: {item['target']}")
             os.replace(part, target)
             if meta.exists():
                 meta.unlink()
@@ -786,7 +788,7 @@ def transfer_plan(
     warnings = []
     try:
         ensure_storage_available(destination_storage, required_bytes, destination_label)
-    except AgentFTPError as exc:
+    except AgentRemoteSyncError as exc:
         warnings.append({"code": exc.code, "message": exc.message})
     return {
         "direction": direction,
@@ -849,7 +851,7 @@ def build_download_plan(remote: RemoteClient, paths: list[str], local_dir: str) 
         source_agent = clean_rel_path(str(raw_path))
         stat = remote.stat(source_agent)
         if not stat.get("exists"):
-            raise AgentFTPError(404, "not_found", f"Remote path not found: {source_agent}")
+            raise AgentRemoteSyncError(404, "not_found", f"Remote path not found: {source_agent}")
         entry = stat["entry"]
         base_name = PurePosixPath(source_agent).name or "remote-root"
         if entry["type"] == "dir":
@@ -882,7 +884,7 @@ def build_download_plan(remote: RemoteClient, paths: list[str], local_dir: str) 
                 }
             )
         else:
-            raise AgentFTPError(400, "unsupported_type", "Symlinks are not transferred")
+            raise AgentRemoteSyncError(400, "unsupported_type", "Symlinks are not transferred")
     return {"dirs": sorted(dirs), "files": files}
 
 
@@ -894,7 +896,7 @@ def posix_relative(base: str, child: str) -> str:
     prefix = base_clean + "/"
     if child_clean.startswith(prefix):
         return child_clean[len(prefix) :]
-    raise AgentFTPError(400, "bad_tree", "Remote tree returned a path outside the requested base")
+    raise AgentRemoteSyncError(400, "bad_tree", "Remote tree returned a path outside the requested base")
 
 
 def to_local_agent_path(root: Path, target: Path) -> str:
@@ -903,7 +905,7 @@ def to_local_agent_path(root: Path, target: Path) -> str:
     try:
         rel = resolved.relative_to(root)
     except ValueError as exc:
-        raise AgentFTPError(403, "path_escape", "Local path escapes root") from exc
+        raise AgentRemoteSyncError(403, "path_escape", "Local path escapes root") from exc
     return "/" + rel.as_posix() if rel.as_posix() != "." else "/"
 
 
@@ -926,13 +928,13 @@ def first(query: dict[str, list[str]], name: str, default: str) -> str:
     return values[0]
 
 
-def remote_http_error(exc: HTTPError) -> AgentFTPError:
+def remote_http_error(exc: HTTPError) -> AgentRemoteSyncError:
     raw = exc.read()
     try:
         payload = json.loads(raw.decode("utf-8")) if raw else {}
     except json.JSONDecodeError:
         payload = {}
-    return AgentFTPError(
+    return AgentRemoteSyncError(
         exc.code,
         str(payload.get("error", "remote_error")),
         str(payload.get("message", exc.reason)),
@@ -951,6 +953,7 @@ def run_master(
     tls_fingerprint: str = "",
     tls_insecure: bool = False,
     ca_file: str = "",
+    alias: str = "",
 ) -> None:
     if password is None and token is None:
         import getpass
@@ -966,15 +969,25 @@ def run_master(
         tls_insecure=tls_insecure,
         ca_file=ca_file,
     )
-    state = MasterState(root, remote)
+    state = MasterState(root, remote, alias=alias)
     server = bind_master_server(state, ui_port)
     actual_port = server.server_address[1]
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     url = f"http://127.0.0.1:{actual_port}"
+    instance = register_instance(
+        "master",
+        root=root,
+        port=actual_port,
+        url=url,
+        alias=alias,
+        remote=remote.base_url,
+        name=f"master {alias or remote.base_url}",
+    )
+    heartbeat = start_heartbeat(instance["id"])
     print()
-    print("agentFTP Master")
-    print("===============")
+    print("agent-remote-sync Master")
+    print("========================")
     print(f"Remote: {remote.base_url}")
     print(f"Local:  {root}")
     print(f"UI:     {url}")
@@ -983,13 +996,13 @@ def run_master(
     print("Commands: [q] stop")
     try:
         if not input_available():
-            wait_without_stdin("agentFTP master")
+            wait_without_stdin("agent-remote-sync master")
         else:
             while True:
                 try:
-                    command = input("agentftp-master> ").strip().lower()
+                    command = input("agent-remote-sync-master> ").strip().lower()
                 except EOFError:
-                    wait_without_stdin("agentFTP master")
+                    wait_without_stdin("agent-remote-sync master")
                     break
                 if command in ("q", "quit", "exit"):
                     break
@@ -998,6 +1011,8 @@ def run_master(
     except KeyboardInterrupt:
         print()
     finally:
+        heartbeat.set()
+        mark_instance_stopped(instance["id"])
         server.shutdown()
         server.server_close()
 
@@ -1016,11 +1031,11 @@ def wait_without_stdin(label: str) -> None:
         time.sleep(3600)
 
 
-def bind_master_server(state: MasterState, start_port: int) -> AgentFTPMasterServer:
+def bind_master_server(state: MasterState, start_port: int) -> AgentRemoteSyncMasterServer:
     last_error: OSError | None = None
     for port in range(start_port, start_port + 50):
         try:
-            return AgentFTPMasterServer(("127.0.0.1", port), state)
+            return AgentRemoteSyncMasterServer(("127.0.0.1", port), state)
         except OSError as exc:
             last_error = exc
     raise SystemExit(f"Could not bind a master UI port: {last_error}")
