@@ -73,6 +73,7 @@ class TransferJob:
     started_at: float = field(default_factory=time.time)
     finished_at: float | None = None
     cancel_requested: bool = False
+    items: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         now = time.time()
@@ -92,6 +93,11 @@ class TransferJob:
             "startedAt": self.started_at,
             "finishedAt": self.finished_at,
             "cancelRequested": self.cancel_requested,
+            "items": [dict(item) for item in self.items],
+            "totalItems": len(self.items),
+            "doneItems": sum(1 for item in self.items if item.get("state") == "done"),
+            "cancelledItems": sum(1 for item in self.items if item.get("state") == "cancelled"),
+            "errorItems": sum(1 for item in self.items if item.get("state") == "error"),
             "elapsedSeconds": elapsed,
             "bytesPerSecond": bytes_per_second,
             "etaSeconds": eta_seconds,
@@ -101,6 +107,105 @@ class TransferJob:
     def raise_if_cancelled(self) -> None:
         if self.cancel_requested:
             raise AgentRemoteSyncError(499, "cancelled", "Transfer was cancelled")
+
+    def set_items(self, items: list[dict[str, Any]]) -> None:
+        self.items = []
+        for index, item in enumerate(items):
+            total = int(item.get("totalBytes", item.get("size", 0)) or 0)
+            self.items.append(
+                {
+                    "id": str(item.get("id") or f"item-{index}"),
+                    "type": str(item.get("type") or "file"),
+                    "source": str(item.get("source") or ""),
+                    "target": str(item.get("target") or ""),
+                    "size": total,
+                    "totalBytes": total,
+                    "doneBytes": 0,
+                    "state": "queued",
+                    "error": "",
+                    "cancelRequested": False,
+                    "startedAt": None,
+                    "finishedAt": None,
+                }
+            )
+
+    def find_item(self, item_id: str) -> dict[str, Any]:
+        for item in self.items:
+            if item.get("id") == item_id:
+                return item
+        raise AgentRemoteSyncError(404, "item_not_found", "Transfer item was not found")
+
+    def cancel_item(self, item_id: str) -> dict[str, Any]:
+        item = self.find_item(item_id)
+        if item.get("state") in ("done", "error", "cancelled"):
+            return item
+        item["cancelRequested"] = True
+        if item.get("state") == "queued":
+            self.mark_item_cancelled(item_id)
+        return item
+
+    def item_cancel_requested(self, item_id: str) -> bool:
+        if self.cancel_requested:
+            return True
+        try:
+            return bool(self.find_item(item_id).get("cancelRequested"))
+        except AgentRemoteSyncError:
+            return False
+
+    def start_item(self, item_id: str) -> bool:
+        self.raise_if_cancelled()
+        item = self.find_item(item_id)
+        if item.get("state") in ("done", "error", "cancelled"):
+            return False
+        if item.get("cancelRequested"):
+            self.mark_item_cancelled(item_id)
+            return False
+        item["state"] = "running"
+        item["startedAt"] = time.time()
+        self.current = transfer_item_label(item)
+        return True
+
+    def add_item_done(self, item_id: str, byte_count: int) -> None:
+        amount = max(0, int(byte_count))
+        if amount <= 0:
+            return
+        item = self.find_item(item_id)
+        item["doneBytes"] = min(int(item.get("totalBytes") or 0), int(item.get("doneBytes") or 0) + amount)
+        self.done_bytes = min(self.total_bytes, self.done_bytes + amount)
+
+    def mark_item_done(self, item_id: str) -> None:
+        item = self.find_item(item_id)
+        item["state"] = "done"
+        item["doneBytes"] = int(item.get("totalBytes") or item.get("doneBytes") or 0)
+        item["finishedAt"] = time.time()
+
+    def mark_item_cancelled(self, item_id: str) -> None:
+        item = self.find_item(item_id)
+        item["state"] = "cancelled"
+        item["cancelRequested"] = True
+        item["error"] = item.get("error") or "Item was cancelled"
+        item["finishedAt"] = time.time()
+
+    def mark_item_error(self, item_id: str, message: str) -> None:
+        item = self.find_item(item_id)
+        item["state"] = "error"
+        item["error"] = message
+        item["finishedAt"] = time.time()
+
+    def mark_open_items_cancelled(self) -> None:
+        for item in self.items:
+            if item.get("state") not in ("done", "error", "cancelled"):
+                self.mark_item_cancelled(str(item.get("id")))
+
+
+def transfer_item_label(item: dict[str, Any]) -> str:
+    source = str(item.get("source") or "")
+    target = str(item.get("target") or "")
+    if item.get("type") == "mkdir":
+        return f"mkdir {target}"
+    if source and target:
+        return f"{source} -> {target}"
+    return target or source or str(item.get("id") or "")
 
 
 def make_token() -> str:

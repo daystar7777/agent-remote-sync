@@ -281,15 +281,40 @@
       min-height: 0;
     }
 
+    .queue-job {
+      border-bottom: 1px solid var(--line);
+    }
+
+    .queue-job-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 8px 12px;
+      background: #f8fafc;
+      font-size: 12px;
+    }
+
+    .queue-job-title {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-weight: 700;
+    }
+
     .queue-row {
       display: grid;
-      grid-template-columns: 84px minmax(0, 1fr) 88px;
+      grid-template-columns: 82px 58px minmax(0, 1fr) 88px 70px;
       gap: 8px;
       align-items: center;
       min-height: 30px;
       padding: 0 12px;
       border-bottom: 1px solid #eef1f5;
       font-size: 12px;
+    }
+
+    .queue-row:last-child {
+      border-bottom: 0;
     }
 
     .queue-row.current {
@@ -306,7 +331,8 @@
     }
 
     .queue-path,
-    .queue-size {
+    .queue-size,
+    .queue-kind {
       overflow: hidden;
       text-overflow: ellipsis;
       white-space: nowrap;
@@ -315,6 +341,13 @@
     .queue-status {
       color: var(--muted);
       font-weight: 650;
+    }
+
+    .queue-row button,
+    .queue-job-head button {
+      min-height: 24px;
+      padding: 3px 8px;
+      font-size: 12px;
     }
 
     dialog {
@@ -535,8 +568,10 @@
       remoteParent: "/",
       localParent: "/",
       selected: { remote: [], local: [] },
-      currentJobId: "",
-      activeTransfer: null
+      jobs: [],
+      jobStates: {},
+      jobPollTimer: null,
+      monitorHidden: false
     };
 
     const statusEl = document.getElementById("status");
@@ -574,87 +609,76 @@
       statusEl.textContent = text;
     }
 
-    function setCurrentJob(id) {
-      state.currentJobId = id || "";
-      cancelTransferEl.hidden = !state.currentJobId;
+    function activeJobs() {
+      return state.jobs.filter((job) => job.state === "queued" || job.state === "running");
     }
 
-    function setActiveTransfer(plan, verb) {
-      let offset = 0;
-      state.activeTransfer = {
-        verb,
-        totalBytes: Number(plan.totalBytes || 0),
-        totalFiles: Number(plan.totalFiles || 0),
-        totalDirs: Number(plan.totalDirs || 0),
-        files: plan.files.map((item) => {
-          const size = Number(item.size || 0);
-          const row = {
-            source: item.source,
-            target: item.target,
-            size,
-            startBytes: offset,
-            endBytes: offset + size
-          };
-          offset += size;
-          return row;
-        })
-      };
-      transferMonitorEl.hidden = false;
-      renderTransferMonitor();
+    function terminalState(value) {
+      return value === "done" || value === "error" || value === "cancelled";
     }
 
-    function renderTransferMonitor(job = null) {
-      const transfer = state.activeTransfer;
-      if (!transfer) {
+    function renderTransferMonitor() {
+      const jobs = state.jobs;
+      const active = activeJobs();
+      cancelTransferEl.hidden = active.length === 0;
+      if (!jobs.length || state.monitorHidden) {
         transferMonitorEl.hidden = true;
         return;
       }
       transferMonitorEl.hidden = false;
-      const stateText = job ? job.state : "queued";
-      const doneBytes = Number(job?.doneBytes || 0);
-      const totalBytes = Number(job?.totalBytes || transfer.totalBytes || 0);
-      const speed = Number(job?.bytesPerSecond || 0);
-      const eta = job?.etaSeconds;
-      const speedText = speed > 0 ? `${formatBytes(speed)}/s` : "calculating";
-      const etaText = eta !== null && eta !== undefined ? formatDuration(Number(eta)) : "--";
-      transferTitleEl.textContent = `${transfer.verb} transfer`;
+      const totalBytes = jobs.reduce((sum, job) => sum + Number(job.totalBytes || 0), 0);
+      const doneBytes = jobs.reduce((sum, job) => sum + Number(job.doneBytes || 0), 0);
+      const speed = active.reduce((sum, job) => sum + Number(job.bytesPerSecond || 0), 0);
+      const remaining = active.reduce((sum, job) => sum + Math.max(0, Number(job.totalBytes || 0) - Number(job.doneBytes || 0)), 0);
+      const eta = speed > 0 ? remaining / speed : null;
+      const speedText = speed > 0 ? `${formatBytes(speed)}/s` : "idle";
+      const etaText = eta !== null ? formatDuration(eta) : "--";
+      transferTitleEl.textContent = "Transfer queue";
       transferSummaryEl.textContent =
-        `${stateText}: ${formatBytes(doneBytes)} / ${formatBytes(totalBytes)} | ${speedText} | ETA ${etaText} | ${transfer.totalFiles} file(s), ${transfer.totalDirs} folder(s)`;
-      if (job?.state === "done") {
-        transferCurrentEl.textContent = "Completed";
-      } else if (job?.state === "cancelled") {
-        transferCurrentEl.textContent = job.error ? `Cancelled: ${job.error}` : "Cancelled";
-      } else if (job?.state === "error") {
-        transferCurrentEl.textContent = job.error ? `Error: ${job.error}` : "Error";
-      } else {
-        transferCurrentEl.textContent = job?.current ? `Current: ${job.current}` : "Waiting to start";
-      }
+        `${active.length} active, ${jobs.length} total | ${formatBytes(doneBytes)} / ${formatBytes(totalBytes)} | ${speedText} | ETA ${etaText}`;
+      transferCurrentEl.textContent = active.map((job) => `${job.kind}: ${job.current || job.state}`).join(" | ") || "No active transfer";
       progressEl.max = totalBytes || 1;
       progressEl.value = Math.min(doneBytes, totalBytes || 1);
-      transferQueueEl.innerHTML = transfer.files.map((item) => {
-        const pair = `${item.source} -> ${item.target}`;
-        const rowState = transferRowState(item, pair, job, doneBytes);
-        return `<div class="queue-row ${rowState}">
-          <span class="queue-status">${escapeHtml(rowState)}</span>
-          <span class="queue-path" title="${escapeAttr(pair)}">${escapeHtml(pair)}</span>
-          <span class="queue-size">${formatBytes(item.size)}</span>
-        </div>`;
-      }).join("") || `<div class="queue-row done">
+      transferQueueEl.innerHTML = jobs.map(renderJob).join("");
+    }
+
+    function renderJob(job) {
+      const doneItems = Number(job.doneItems || 0);
+      const totalItems = Number(job.totalItems || 0);
+      const speed = Number(job.bytesPerSecond || 0);
+      const eta = job.etaSeconds;
+      const cancellable = job.state === "queued" || job.state === "running";
+      const summary = `${job.kind} ${job.state} | ${doneItems}/${totalItems} item(s) | ${formatBytes(job.doneBytes)} / ${formatBytes(job.totalBytes)} | ${speed > 0 ? `${formatBytes(speed)}/s` : "idle"} | ETA ${eta !== null && eta !== undefined ? formatDuration(Number(eta)) : "--"}`;
+      const rows = (job.items || []).map((item) => renderJobItem(job, item)).join("") || `<div class="queue-row done">
         <span class="queue-status">done</span>
-        <span class="queue-path">No files to transfer.</span>
+        <span class="queue-kind">none</span>
+        <span class="queue-path">No queued items.</span>
         <span class="queue-size">0 B</span>
+        <span></span>
+      </div>`;
+      return `<div class="queue-job">
+        <div class="queue-job-head">
+          <span class="queue-job-title" title="${escapeAttr(summary)}">${escapeHtml(summary)}</span>
+          ${cancellable ? `<button class="danger" data-cancel-job="${escapeAttr(job.id)}" type="button">Cancel job</button>` : ""}
+        </div>
+        ${rows}
       </div>`;
     }
 
-    function transferRowState(item, pair, job, doneBytes) {
-      if (!job) return "pending";
-      if (job.state === "error") return pair === job.current ? "error" : "pending";
-      if (job.state === "cancelled") return pair === job.current ? "cancelled" : "pending";
-      if (job.state === "done") return "done";
-      if (pair === job.current) return "current";
-      if (doneBytes >= item.endBytes) return "done";
-      if (doneBytes > item.startBytes && doneBytes < item.endBytes) return "current";
-      return "pending";
+    function renderJobItem(job, item) {
+      const rowState = item.state === "running" ? "current" : item.state || "queued";
+      const kind = item.type === "mkdir" ? "mkdir" : job.kind;
+      const pair = item.type === "mkdir" ? `mkdir ${item.target}` : `${item.source} -> ${item.target}`;
+      const cancellable = (job.state === "queued" || job.state === "running") &&
+        (item.state === "queued" || item.state === "running") &&
+        !item.cancelRequested;
+      return `<div class="queue-row ${escapeAttr(rowState)}">
+        <span class="queue-status">${escapeHtml(rowState)}</span>
+        <span class="queue-kind">${escapeHtml(kind)}</span>
+        <span class="queue-path" title="${escapeAttr(pair)}">${escapeHtml(pair)}</span>
+        <span class="queue-size">${formatBytes(Number(item.doneBytes || 0))}${item.type === "file" ? ` / ${formatBytes(item.totalBytes || item.size || 0)}` : ""}</span>
+        <span>${cancellable ? `<button data-cancel-job="${escapeAttr(job.id)}" data-cancel-item="${escapeAttr(item.id)}" type="button">Cancel</button>` : ""}</span>
+      </div>`;
     }
 
     function formatBytes(value) {
@@ -875,13 +899,13 @@
       const plan = await api("/api/plan/upload", { method: "POST", body: JSON.stringify(body) });
       const overwrite = await showPlanDialog(plan, "Upload");
       if (overwrite === null) return;
-      setActiveTransfer(plan, "Upload");
       const job = await api("/api/jobs/upload", {
         method: "POST",
         body: JSON.stringify({ planId: plan.planId, overwrite })
       });
-      setCurrentJob(job.id);
-      pollJob(job.id);
+      state.monitorHidden = false;
+      setStatus(`queued upload job ${job.id.slice(0, 8)}`);
+      await pollJobs();
     }
 
     async function startDownload() {
@@ -894,13 +918,13 @@
       const plan = await api("/api/plan/download", { method: "POST", body: JSON.stringify(body) });
       const overwrite = await showPlanDialog(plan, "Download");
       if (overwrite === null) return;
-      setActiveTransfer(plan, "Download");
       const job = await api("/api/jobs/download", {
         method: "POST",
         body: JSON.stringify({ planId: plan.planId, overwrite })
       });
-      setCurrentJob(job.id);
-      pollJob(job.id);
+      state.monitorHidden = false;
+      setStatus(`queued download job ${job.id.slice(0, 8)}`);
+      await pollJobs();
     }
 
     function showPlanDialog(plan, verb) {
@@ -913,8 +937,8 @@
         document.getElementById("plan-required").textContent = formatBytes(plan.requiredBytes);
         document.getElementById("plan-free").textContent = formatBytes(plan.destinationStorage.freeBytes);
         document.getElementById("plan-warning").textContent = warningText;
-        document.getElementById("plan-files").textContent = plan.files.slice(0, 80)
-          .map((item) => `${item.source} -> ${item.target}`)
+        document.getElementById("plan-files").textContent = (plan.items || []).slice(0, 120)
+          .map((item) => item.type === "mkdir" ? `[mkdir] ${item.target}` : `${item.source} -> ${item.target}`)
           .join("\n") || "No files to transfer.";
         const overwriteRow = document.getElementById("plan-overwrite-row");
         const overwriteInput = document.getElementById("plan-overwrite");
@@ -944,31 +968,48 @@
       });
     }
 
-    async function pollJob(id) {
-      const job = await api(`/api/jobs/${id}`);
-      const total = job.totalBytes || 1;
-      progressEl.max = total;
-      progressEl.value = Math.min(job.doneBytes || 0, total);
-      renderTransferMonitor(job);
-      setStatus(`${job.state}: ${job.current || job.kind} (${formatBytes(job.doneBytes)} / ${formatBytes(job.totalBytes)})`);
-      if (job.state === "running" || job.state === "queued") {
-        setTimeout(() => pollJob(id).catch(showError), 700);
-      } else {
-        setCurrentJob("");
-        if (job.state === "error") {
-          setStatus(`error: ${job.error}`);
-        } else if (job.state === "cancelled") {
-          setStatus("transfer cancelled");
-        } else {
-          setStatus(`${job.kind} complete`);
-          await Promise.all([load("remote"), load("local"), loadStorage("remote"), loadStorage("local")]);
+    async function pollJobs() {
+      if (state.jobPollTimer) {
+        clearTimeout(state.jobPollTimer);
+        state.jobPollTimer = null;
+      }
+      const data = await api("/api/jobs");
+      const previous = state.jobStates;
+      const nextStates = {};
+      let refreshPanels = false;
+      for (const job of data.jobs || []) {
+        nextStates[job.id] = job.state;
+        if (previous[job.id] && !terminalState(previous[job.id]) && terminalState(job.state)) {
+          refreshPanels = true;
+          if (job.state === "error") {
+            setStatus(`error: ${job.error}`);
+          } else if (job.state === "cancelled") {
+            setStatus(`${job.kind} cancelled`);
+          } else {
+            setStatus(`${job.kind} complete`);
+          }
         }
       }
+      state.jobs = data.jobs || [];
+      state.jobStates = nextStates;
+      renderTransferMonitor();
+      if (refreshPanels) {
+        await Promise.all([load("remote"), load("local"), loadStorage("remote"), loadStorage("local")]);
+      }
+      scheduleJobPoll(activeJobs().length ? 700 : 2500);
     }
 
-    async function cancelCurrentJob() {
-      if (!state.currentJobId) return;
-      const id = state.currentJobId;
+    function scheduleJobPoll(delay) {
+      if (state.jobPollTimer) clearTimeout(state.jobPollTimer);
+      state.jobPollTimer = setTimeout(() => {
+        pollJobs().catch((error) => {
+          console.error(error);
+          scheduleJobPoll(3000);
+        });
+      }, delay);
+    }
+
+    async function cancelJob(id) {
       cancelTransferEl.disabled = true;
       try {
         await api(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
@@ -976,6 +1017,32 @@
           body: JSON.stringify({})
         });
         setStatus("cancelling transfer...");
+        await pollJobs();
+      } finally {
+        cancelTransferEl.disabled = false;
+      }
+    }
+
+    async function cancelJobItem(jobId, itemId) {
+      await api(`/api/jobs/${encodeURIComponent(jobId)}/items/${encodeURIComponent(itemId)}/cancel`, {
+        method: "POST",
+        body: JSON.stringify({})
+      });
+      setStatus("cancelling queue item...");
+      await pollJobs();
+    }
+
+    async function cancelActiveJobs() {
+      const jobs = activeJobs();
+      if (!jobs.length) return;
+      cancelTransferEl.disabled = true;
+      try {
+        await Promise.all(jobs.map((job) => api(`/api/jobs/${encodeURIComponent(job.id)}/cancel`, {
+          method: "POST",
+          body: JSON.stringify({})
+        })));
+        setStatus("cancelling active transfers...");
+        await pollJobs();
       } finally {
         cancelTransferEl.disabled = false;
       }
@@ -984,15 +1051,7 @@
     function showError(error) {
       console.error(error);
       setStatus(`error: ${error.message}`);
-      if (state.activeTransfer) {
-        renderTransferMonitor({
-          state: "error",
-          error: error.message,
-          current: "",
-          doneBytes: progressEl.value || 0,
-          totalBytes: progressEl.max || state.activeTransfer.totalBytes || 0
-        });
-      }
+      renderTransferMonitor();
       alert(error.message);
     }
 
@@ -1003,15 +1062,28 @@
     });
     document.getElementById("upload").addEventListener("click", () => startUpload().catch(showError));
     document.getElementById("download").addEventListener("click", () => startDownload().catch(showError));
-    cancelTransferEl.addEventListener("click", () => cancelCurrentJob().catch(showError));
+    cancelTransferEl.addEventListener("click", () => cancelActiveJobs().catch(showError));
+    transferQueueEl.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target : event.target.parentElement;
+      const button = target?.closest("button[data-cancel-job]");
+      if (!button) return;
+      const jobId = button.dataset.cancelJob;
+      const itemId = button.dataset.cancelItem;
+      if (itemId) {
+        cancelJobItem(jobId, itemId).catch(showError);
+      } else {
+        cancelJob(jobId).catch(showError);
+      }
+    });
     transferHideEl.addEventListener("click", () => {
+      state.monitorHidden = true;
       transferMonitorEl.hidden = true;
     });
 
     api("/api/bootstrap").then((data) => {
       document.getElementById("remote-meta").textContent = data.remoteBase;
       document.getElementById("local-meta").textContent = data.localRoot;
-      return Promise.all([load("remote"), load("local"), loadStorage("remote"), loadStorage("local")]);
+      return Promise.all([load("remote"), load("local"), loadStorage("remote"), loadStorage("local"), pollJobs()]);
     }).catch(showError);
   </script>
 </body>

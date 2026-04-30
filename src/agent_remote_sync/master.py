@@ -303,6 +303,7 @@ class MasterState:
                 if exc.code == "cancelled":
                     job.state = "cancelled"
                     job.error = exc.message
+                    job.mark_open_items_cancelled()
                 else:
                     job.state = "error"
                     job.error = exc.message
@@ -322,12 +323,21 @@ class MasterState:
             raise AgentRemoteSyncError(404, "job_not_found", "Transfer job was not found")
         return job
 
+    def list_jobs(self) -> list[dict[str, Any]]:
+        with self.lock:
+            jobs = list(self.jobs.values())
+        jobs.sort(key=lambda item: item.started_at, reverse=True)
+        return [job.as_dict() for job in jobs]
+
     def cancel_job(self, job_id: str) -> TransferJob:
         job = self.get_job(job_id)
         if job.state in ("done", "error", "cancelled"):
             return job
         job.cancel_requested = True
         return job
+
+    def cancel_job_item(self, job_id: str, item_id: str) -> dict[str, Any]:
+        return self.get_job(job_id).cancel_item(item_id)
 
     def save_plan(self, plan: dict[str, Any]) -> dict[str, Any]:
         plan = dict(plan)
@@ -387,6 +397,8 @@ class MasterHandler(BaseHTTPRequestHandler):
                 send_json(self, 200, storage_info(self.server.state.local_root))
             elif parsed.path == "/api/remote/storage":
                 send_json(self, 200, self.server.state.remote.storage())
+            elif parsed.path == "/api/jobs":
+                send_json(self, 200, {"jobs": self.server.state.list_jobs()})
             elif parsed.path.startswith("/api/jobs/"):
                 job_id = parsed.path.removeprefix("/api/jobs/")
                 send_json(self, 200, self.server.state.get_job(job_id).as_dict())
@@ -431,6 +443,13 @@ class MasterHandler(BaseHTTPRequestHandler):
                 send_json(self, 200, self.server.state.save_plan(self.build_upload_transfer_plan(payload)))
             elif parsed.path == "/api/plan/download":
                 send_json(self, 200, self.server.state.save_plan(self.build_download_transfer_plan(payload)))
+            elif parsed.path.startswith("/api/jobs/") and "/items/" in parsed.path and parsed.path.endswith("/cancel"):
+                parts = parsed.path.strip("/").split("/")
+                if len(parts) != 6 or parts[0] != "api" or parts[1] != "jobs" or parts[3] != "items":
+                    raise AgentRemoteSyncError(404, "not_found", "Endpoint not found")
+                job = self.server.state.get_job(parts[2])
+                item = self.server.state.cancel_job_item(parts[2], parts[4])
+                send_json(self, 200, {"job": job.as_dict(), "item": dict(item)})
             elif parsed.path.startswith("/api/jobs/") and parsed.path.endswith("/cancel"):
                 job_id = parsed.path.removeprefix("/api/jobs/").removesuffix("/cancel")
                 send_json(self, 200, self.server.state.cancel_job(job_id).as_dict())
@@ -562,31 +581,47 @@ class MasterHandler(BaseHTTPRequestHandler):
         overwrite = bool(payload.get("overwrite", False))
         plan = self.plan_from_payload(payload, "upload")
         job.total_bytes = int(plan["totalBytes"])
+        job.set_items(job_items_from_plan(plan))
         required_bytes = int(plan["requiredBytes"])
         if required_bytes:
             ensure_storage_available(plan["destinationStorage"], required_bytes, "remote destination")
         if plan["conflicts"] and not overwrite:
             raise AgentRemoteSyncError(409, "exists", "Remote file exists and overwrite was not confirmed")
-        for directory in plan["dirs"]:
+        for index, directory in enumerate(plan["dirs"]):
+            item_id = f"dir-{index}"
             job.raise_if_cancelled()
-            self.server.state.remote.mkdir(directory)
-        for item in plan["files"]:
+            if not job.start_item(item_id):
+                continue
+            try:
+                self.server.state.remote.mkdir(directory)
+                job.mark_item_done(item_id)
+            except Exception as exc:
+                job.mark_item_error(item_id, str(exc))
+                raise
+        for index, item in enumerate(plan["files"]):
+            item_id = f"file-{index}"
             job.raise_if_cancelled()
-            job.current = f"{item['source']} -> {item['target']}"
+            if not job.start_item(item_id):
+                continue
             source = resolve_path(self.server.state.local_root, item["source"])
             digest = sha256_file(source)
             status = self.server.state.remote.upload_status(item["target"], item["size"])
             if status.get("exists") and not overwrite:
+                job.mark_item_error(item_id, f"Remote file exists: {item['target']}")
                 raise AgentRemoteSyncError(409, "exists", f"Remote file exists: {item['target']}")
             offset = int(status.get("partialSize", 0))
             if offset > item["size"]:
+                job.mark_item_error(item_id, f"Remote partial is larger than source: {item['target']}")
                 raise AgentRemoteSyncError(409, "bad_partial", f"Remote partial is larger than source: {item['target']}")
-            job.done_bytes += offset
+            job.add_item_done(item_id, offset)
             with source.open("rb") as handle:
                 handle.seek(offset)
                 current_offset = offset
                 while current_offset < item["size"]:
                     job.raise_if_cancelled()
+                    if job.item_cancel_requested(item_id):
+                        job.mark_item_cancelled(item_id)
+                        break
                     chunk = handle.read(min(CHUNK_SIZE, item["size"] - current_offset))
                     if not chunk:
                         break
@@ -598,7 +633,10 @@ class MasterHandler(BaseHTTPRequestHandler):
                         overwrite=overwrite,
                     )
                     current_offset = int(response.get("received", current_offset + len(chunk)))
-                    job.done_bytes += len(chunk)
+                    job.add_item_done(item_id, len(chunk))
+            if job.item_cancel_requested(item_id):
+                job.mark_item_cancelled(item_id)
+                continue
             self.server.state.remote.upload_finish(
                 item["target"],
                 item["size"],
@@ -606,56 +644,79 @@ class MasterHandler(BaseHTTPRequestHandler):
                 digest,
                 overwrite=overwrite,
             )
+            job.mark_item_done(item_id)
 
     def run_download_job(self, job: TransferJob, payload: dict[str, Any]) -> None:
         overwrite = bool(payload.get("overwrite", False))
         plan = self.plan_from_payload(payload, "download")
         job.total_bytes = int(plan["totalBytes"])
+        job.set_items(job_items_from_plan(plan))
         required_bytes = int(plan["requiredBytes"])
         if required_bytes:
             ensure_storage_available(plan["destinationStorage"], required_bytes, "local destination")
         if plan["conflicts"] and not overwrite:
             raise AgentRemoteSyncError(409, "exists", "Local file exists and overwrite was not confirmed")
-        for directory in plan["dirs"]:
+        for index, directory in enumerate(plan["dirs"]):
+            item_id = f"dir-{index}"
             job.raise_if_cancelled()
-            resolve_path(self.server.state.local_root, directory, allow_missing=True).mkdir(
-                parents=True, exist_ok=True
-            )
-        for item in plan["files"]:
+            if not job.start_item(item_id):
+                continue
+            try:
+                resolve_path(self.server.state.local_root, directory, allow_missing=True).mkdir(
+                    parents=True, exist_ok=True
+                )
+                job.mark_item_done(item_id)
+            except Exception as exc:
+                job.mark_item_error(item_id, str(exc))
+                raise
+        for index, item in enumerate(plan["files"]):
+            item_id = f"file-{index}"
             job.raise_if_cancelled()
-            job.current = f"{item['source']} -> {item['target']}"
+            if not job.start_item(item_id):
+                continue
             target = resolve_path(self.server.state.local_root, item["target"], allow_missing=True)
             if target.exists() and not overwrite:
+                job.mark_item_error(item_id, f"Local file exists: {item['target']}")
                 raise AgentRemoteSyncError(409, "exists", f"Local file exists: {item['target']}")
             part, meta = partial_paths(self.server.state.local_root, item["target"])
             offset = part.stat().st_size if part.exists() else 0
             if offset > item["size"]:
                 part.unlink()
                 offset = 0
-            job.done_bytes += offset
+            job.add_item_done(item_id, offset)
             with part.open("ab") as handle:
                 current_offset = offset
                 while current_offset < item["size"]:
                     job.raise_if_cancelled()
+                    if job.item_cancel_requested(item_id):
+                        job.mark_item_cancelled(item_id)
+                        break
                     length = min(CHUNK_SIZE, item["size"] - current_offset)
                     chunk = self.server.state.remote.download_chunk(
                         item["source"], current_offset, length
                     )
                     if not chunk:
+                        job.mark_item_error(item_id, "Remote returned an empty chunk")
                         raise AgentRemoteSyncError(502, "empty_chunk", "Remote returned an empty chunk")
                     handle.write(chunk)
                     current_offset += len(chunk)
-                    job.done_bytes += len(chunk)
+                    job.add_item_done(item_id, len(chunk))
+            if job.item_cancel_requested(item_id):
+                job.mark_item_cancelled(item_id)
+                continue
             if part.stat().st_size != item["size"]:
+                job.mark_item_error(item_id, f"Downloaded size mismatch: {item['target']}")
                 raise AgentRemoteSyncError(400, "size_mismatch", f"Downloaded size mismatch: {item['target']}")
             target.parent.mkdir(parents=True, exist_ok=True)
             if target.exists() and not overwrite:
+                job.mark_item_error(item_id, f"Local file exists: {item['target']}")
                 raise AgentRemoteSyncError(409, "exists", f"Local file exists: {item['target']}")
             os.replace(part, target)
             if meta.exists():
                 meta.unlink()
             if item.get("mtime"):
                 os.utime(target, (float(item["mtime"]), float(item["mtime"])))
+            job.mark_item_done(item_id)
 
 
 def build_upload_plan(local_root: Path, paths: list[str], remote_dir: str) -> dict[str, Any]:
@@ -785,6 +846,7 @@ def transfer_plan(
     destination_label: str,
 ) -> dict[str, Any]:
     total_bytes = sum(int(item["size"]) for item in files)
+    items = transfer_plan_items(dirs, files)
     warnings = []
     try:
         ensure_storage_available(destination_storage, required_bytes, destination_label)
@@ -796,15 +858,51 @@ def transfer_plan(
         "destination": destination,
         "dirs": dirs,
         "files": files,
+        "items": items,
         "conflicts": conflicts,
         "totalFiles": len(files),
         "totalDirs": len(dirs),
+        "totalItems": len(items),
         "totalBytes": total_bytes,
         "requiredBytes": required_bytes,
         "destinationStorage": destination_storage,
         "canStart": not warnings,
         "warnings": warnings,
     }
+
+
+def transfer_plan_items(dirs: list[str], files: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    items: list[dict[str, Any]] = []
+    for index, directory in enumerate(dirs):
+        items.append(
+            {
+                "id": f"dir-{index}",
+                "type": "mkdir",
+                "source": "",
+                "target": directory,
+                "size": 0,
+                "totalBytes": 0,
+            }
+        )
+    for index, item in enumerate(files):
+        items.append(
+            {
+                "id": f"file-{index}",
+                "type": "file",
+                "source": item["source"],
+                "target": item["target"],
+                "size": int(item["size"]),
+                "totalBytes": int(item["size"]),
+            }
+        )
+    return items
+
+
+def job_items_from_plan(plan: dict[str, Any]) -> list[dict[str, Any]]:
+    items = plan.get("items")
+    if isinstance(items, list):
+        return [dict(item) for item in items]
+    return transfer_plan_items(list(plan.get("dirs", [])), list(plan.get("files", [])))
 
 
 def upload_required_bytes(remote: RemoteClient, files: list[dict[str, Any]]) -> int:

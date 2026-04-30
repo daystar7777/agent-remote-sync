@@ -1945,6 +1945,9 @@ class UsageScenarioTests(unittest.TestCase):
         self.assertIn('id="transfer-monitor"', html)
         self.assertIn('id="transfer-queue"', html)
         self.assertIn("function renderTransferMonitor", html)
+        self.assertIn("data-cancel-item", html)
+        self.assertIn("/api/jobs", html)
+        self.assertIn("Transfer queue", html)
         self.assertIn("Cannot reach the local agent-remote-sync GUI server", html)
         self.assertNotIn('class="bridge"', html)
 
@@ -2012,6 +2015,73 @@ class UsageScenarioTests(unittest.TestCase):
         self.assertIn("Stop", html)
         self.assertIn("dashboardId", html)
         self.assertIn("confirm: true", html)
+
+    def test_s61_transfer_job_item_cancel_does_not_cancel_whole_job(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            state = MasterState(root, object())  # type: ignore[arg-type]
+            job = TransferJob(id="job", kind="upload", state="running", total_bytes=20)
+            job.set_items(
+                [
+                    {"id": "file-0", "type": "file", "source": "/a.txt", "target": "/a.txt", "size": 10},
+                    {"id": "file-1", "type": "file", "source": "/b.txt", "target": "/b.txt", "size": 10},
+                ]
+            )
+            with state.lock:
+                state.jobs[job.id] = job
+            self.assertTrue(job.start_item("file-0"))
+            item = state.cancel_job_item(job.id, "file-0")
+            self.assertTrue(item["cancelRequested"])
+            if job.item_cancel_requested("file-0"):
+                job.mark_item_cancelled("file-0")
+            self.assertTrue(job.start_item("file-1"))
+            job.add_item_done("file-1", 10)
+            job.mark_item_done("file-1")
+            job.state = "done"
+            data = job.as_dict()
+            states = {item["id"]: item["state"] for item in data["items"]}
+            self.assertEqual(data["state"], "done")
+            self.assertEqual(states["file-0"], "cancelled")
+            self.assertEqual(states["file-1"], "done")
+            self.assertEqual(data["cancelledItems"], 1)
+
+    def test_s62_master_jobs_list_and_mkdir_items_are_reported(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "local"
+            remote = root / "remote"
+            local.mkdir()
+            remote.mkdir()
+            (local / "box" / "sub").mkdir(parents=True)
+            (local / "box" / "sub" / "file.txt").write_text("payload", encoding="utf-8")
+            slave = self.start_slave(remote)
+            master = None
+            try:
+                client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
+                master = AgentRemoteSyncMasterServer(("127.0.0.1", 0), MasterState(local, client))
+                threading.Thread(target=master.serve_forever, daemon=True).start()
+                base = f"http://127.0.0.1:{master.server_address[1]}"
+                plan = request_json(
+                    base,
+                    "POST",
+                    "/api/plan/upload",
+                    {"paths": ["/box"], "remoteDir": "/incoming"},
+                )
+                self.assertTrue(any(item["type"] == "mkdir" for item in plan["items"]))
+                self.assertTrue(any(item["target"] == "/incoming/box/sub" for item in plan["items"]))
+                job = request_json(base, "POST", "/api/jobs/upload", {"planId": plan["planId"], "overwrite": False})
+                listed = request_json(base, "GET", "/api/jobs")
+                self.assertTrue(any(item["id"] == job["id"] for item in listed["jobs"]))
+                result = wait_job(base, job["id"])
+                self.assertEqual(result["state"], "done")
+                self.assertTrue(any(item["type"] == "mkdir" and item["state"] == "done" for item in result["items"]))
+                self.assertEqual((remote / "incoming" / "box" / "sub" / "file.txt").read_text(encoding="utf-8"), "payload")
+            finally:
+                if master:
+                    master.shutdown()
+                    master.server_close()
+                slave.shutdown()
+                slave.server_close()
 
 
 def request_json(base: str, method: str, path: str, payload: dict | None = None) -> dict:
