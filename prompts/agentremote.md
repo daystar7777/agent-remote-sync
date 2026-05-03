@@ -65,9 +65,15 @@ When asked to run slave mode:
 
 1. Confirm the current working folder is the folder the user wants to expose.
 2. Run `agentremote slave`, or `agentremote slave --tls self-signed` when HTTPS is requested.
-3. Let the user set the session password.
-4. If HTTPS is enabled, report the displayed fingerprint.
-5. Report the displayed connection addresses and port.
+3. By default, slave/daemon starts an embedded auto-worker. It processes pending
+   `autoRun` messages on startup. Use `--no-auto-worker` only when the user
+   wants manual inbox review.
+4. For natural-language handoffs, include a trusted
+   `--worker-agent-command <command>` so the receiving host can actually ask its
+   local agent to do the task and write a report.
+5. Let the user set the session password.
+6. If HTTPS is enabled, report the displayed fingerprint.
+7. Report the displayed connection addresses and port.
 
 The slave root is the current folder unless the user explicitly provides another
 root.
@@ -108,25 +114,28 @@ When asked to sync or hand off work without a browser:
    `agentremote handoff <connection-name> <local> "<task>"`.
 5. For full handoff, package task intent, notes, files, and expected report into
    a handoff manifest.
-6. Do not enable automatic execution on the receiver unless the user explicitly
-   asks for auto mode.
-7. After receiving a handoff, inspect the manifest and report the intended
-   action before running commands unless auto mode is already active.
-8. For receiver-side processing, use `agentremote worker --once` first. It dry-runs
-   by default and only executes explicit `agentremote-run:` lines when
+6. `ask`, `tell`, `handoff`, and `call` send `autoRun` instructions by default.
+   Use `--no-auto-run` only when the user asks for manual inbox review.
+7. After receiving a handoff, the default embedded worker processes eligible
+   `autoRun` items first. It only executes explicit `agentremote-run:` lines
+   unless the receiver configured `--worker-agent-command`.
+8. For manual receiver-side processing, use `agentremote worker --once`. It
+   dry-runs by default and only executes explicit `agentremote-run:` lines when
    `--execute ask` or `--execute yes` is supplied.
 9. For automatic report return, include `--callback-alias <alias>` only when that
    alias is already saved on the receiving host. Never place passwords or bearer
    tokens in handoff text.
 
 Do not use `--wait-report` as if it were remote execution. `--wait-report` only
-waits for a STATUS_REPORT that arrives back in the current project. Before
-using it, confirm that one of these is true:
+waits for a STATUS_REPORT that arrives back in the current project. In current
+builds, slave/daemon starts an embedded worker by default and processes pending
+`autoRun` inbox messages on startup, but report return still requires one of
+these:
 
-1. the receiver has a running worker/agent and a saved callback alias back to
-   this host, or
+1. the receiver has a saved callback alias back to this host, or
 2. a human/agent on the receiver will manually inspect the inbox, do the work,
-   and send a report back.
+   and send a report back, or
+3. the receiver writes the expected result file and the requester pulls it.
 
 If a handoff appears stuck:
 
@@ -139,7 +148,7 @@ agentremote processes --root .
 ```
 
 Then ask the receiver-side agent, from the project root that started
-slave/daemon:
+slave/daemon, to inspect or manually process the item:
 
 ```powershell
 agentremote inbox

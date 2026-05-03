@@ -73,8 +73,12 @@ browser UI.
 **Important:** the slave itself is a console process. If the remote worker or
 the agent runtime is started in an approval/permission prompt mode, execution
 can pause on the slave host until someone approves it locally. For unattended
-handoffs, use a pre-approved worker policy only with trusted hosts, explicit
-`agentremote-run:` commands, scoped tokens, and a narrow project root.
+handoffs, the embedded worker is on by default and handles pending `autoRun`
+messages when the receiver starts. Use a pre-approved worker policy only with
+trusted hosts, explicit `agentremote-run:` commands, scoped tokens, and a narrow
+project root. For natural-language handoffs, configure a trusted
+`--worker-agent-command`; use `--no-auto-worker` when you want manual inbox-only
+review.
 
 See [docs/agent-pairing.md](docs/agent-pairing.md) for the expected first-run
 prompts and an agent-friendly launch flow.
@@ -197,6 +201,28 @@ agentremote processes
 
 Use the browser dashboard when you want one screen for nodes, saved daemon
 profiles, local processes, recent calls, and pending approvals.
+
+### Auto Processing Defaults
+
+Receiver `share`, `slave`, and `daemon serve` start an embedded auto-worker by
+default. When the receiver starts, it first processes any pending `autoRun`
+inbox messages, then keeps polling for new work. Sender commands such as
+`ask`, `tell`, `handoff`, and `call` also mark instructions as `autoRun` by
+default.
+
+Use the opt-out flags when you want manual review instead:
+
+```powershell
+agentremote share --no-auto-worker
+agentremote daemon serve --root . --no-auto-worker
+agentremote ask lab "Leave this in the inbox." --no-auto-run
+```
+
+Natural-language tasks need a trusted receiver-side bridge:
+
+```powershell
+agentremote share --host 0.0.0.0 --worker-agent-command "python ./agent_bridge.py"
+```
 
 On the receiving machine, ask the local agent to share the folder from the
 project root:

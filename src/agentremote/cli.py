@@ -2898,12 +2898,14 @@ shell access.
 - `agentremote handoff <host> <local-path> "<task>"` uploads files then sends instruction.
 - Do not upload into `.agentremote_*` paths; those are protocol-reserved. Use a
   project path such as `/Project/AIMemory/incoming_handoffs` for human-readable attachments.
-- `--auto-run` only marks the instruction eligible. The receiver still needs a
-  local worker/agent to claim and process it.
+- `ask`, `tell`, `handoff`, and `call` send `autoRun` instructions by default.
+  Use `--no-auto-run` only when the user wants manual inbox-only review.
+- `--auto-run` marks the instruction eligible for the receiver worker; it does
+  not by itself wake a remote LLM.
 - `--wait-report` is not remote execution. It only waits for a STATUS_REPORT to
-  come back to this project. Before using it, confirm one of these is true:
-  1. the receiver has a running worker and a saved `--callback-alias` back to this host, or
-  2. a human/agent on the receiver will manually run the work and send `agentremote report`.
+  come back to this project. Slave/daemon starts an embedded worker by default,
+  but report return still needs a saved `--callback-alias`, a manual
+  `agentremote report`, or an expected result file that the requester can pull.
 - If no report arrives, run `agentremote calls show <call-id> --root <project>`
   or `agentremote calls wait <call-id> --root <project>`, then ask the
   receiver-side agent to run `agentremote inbox`, `agentremote inbox --read <id>`,
@@ -2934,6 +2936,7 @@ AGENTREMOTE_ONBOARDING_KO_NOTES = """## 한국어 요약
 - 대형 프로젝트는 `sync-project --dry-run --include-memory --profile unity-python-llm`로 계획부터 봅니다.
 - 사용자가 정말 원할 때만 `--all-files` 또는 `--no-default-excludes`를 사용합니다.
 - `--wait-report`는 원격 실행이 아닙니다. 원격 host에서 worker/agent가 inbox를 처리하고 report를 다시 보내야 완료됩니다.
+- `ask`, `tell`, `handoff`, `call`은 기본적으로 `autoRun`으로 보냅니다. 수동 inbox 검토가 필요할 때만 `--no-auto-run`을 사용합니다.
 - 멈춘 것처럼 보이면 `agentremote calls show <call-id> --root <project>`와 `agentremote calls wait <call-id> --root <project>`를 사용하고, 원격 에이전트에게 `agentremote worker --once --execute ask`를 실행하게 하세요.
 - 받는 쪽 slave/daemon은 embedded auto-worker를 기본으로 켜고 시작 시 처리되지 않은 `autoRun` 메시지를 먼저 처리합니다. 수동 inbox 모드가 필요할 때만 `--no-auto-worker`를 사용합니다.
 - 자연어 핸드오프는 `--worker-agent-command`로 신뢰된 로컬 에이전트 브리지를 연결해야 자동 처리됩니다. `--auto-run`만으로 원격 LLM이 깨어나지는 않습니다.
