@@ -148,6 +148,18 @@ python -m pip install -e .
 agentremote doctor
 ```
 
+Use `agentremote doctor --root <project>` when a command seems to be running old
+code. It prints the `agentremote` executable path, imported package path,
+detected checkout, AIMemory status, and registered local processes. If the
+imported checkout differs from the repo you meant to run, stop old agentremote
+processes and reinstall from the intended checkout with `python -m pip install -e .`.
+
+For an LLM-friendly command guide after install, run:
+
+```powershell
+agentremote onboarding --ko
+```
+
 ## Quick Start
 
 The easy command surface is meant for humans and agents. Use these first:
@@ -163,6 +175,7 @@ agentremote ask lab "Run tests and report back" --wait-report
 agentremote handoff lab ./LLL "Review this and report back"
 agentremote map
 agentremote status
+agentremote doctor
 agentremote uninstall
 ```
 
@@ -179,6 +192,7 @@ agentremote sync-project lab --yes
 agentremote ask lab "Run tests and report back" --wait-report
 agentremote map
 agentremote status
+agentremote processes
 ```
 
 Use the browser dashboard when you want one screen for nodes, saved daemon
@@ -248,6 +262,25 @@ process controls, recent calls, and approval cards. It intentionally shows
 approval summaries only; approval details, token hashes, and saved connection
 tokens are not exposed through the dashboard payload.
 
+### Process And GUI Management
+
+Use `agentremote processes` when you need to see which local slave/master/worker
+or controller GUI processes are registered for the current project. This helps
+when a browser UI port such as `7180` is already occupied by an older session.
+
+```powershell
+agentremote processes
+agentremote processes --root C:\work\VTubes
+agentremote processes stop <process-id>
+agentremote processes stop-gui
+agentremote stop-gui --root C:\work\VTubes
+agentremote processes forget <process-id>
+```
+
+`stop` and `stop-gui` refuse to stop a process if its registry metadata no
+longer matches the current project root/PID fingerprint. Use `forget` only to
+remove stale registry entries; it does not kill a process.
+
 ### Daemon Profiles
 
 For repeated use, save a daemon profile for each project. A profile records only
@@ -308,16 +341,52 @@ it. Nothing is transferred until you add `--yes`.
 agentremote sync-project lab
 agentremote sync-project lab --yes
 agentremote sync-project lab --local ./subproject /remote/subproject --yes
-agentremote sync-project lab --include-memory
-agentremote sync-project lab --exclude "*.log"
+agentremote sync-project lab /Project --include-memory --profile unity-python-llm
+agentremote sync-project lab /Project --include-memory --profile unity-python-llm --yes
+agentremote sync-project lab /Project --all-files --dry-run
+agentremote sync-project lab /Project --all-files --exclude node_modules --yes
 ```
 
-Project sync excludes generated and local-state folders by default: `.git/`,
-`.venv/`, `venv/`, `node_modules/`, `__pycache__/`, `.pytest_cache/`,
-`.mypy_cache/`, `.ruff_cache/`, `dist/`, `build/`, `.agentremote/`,
-`.agentremote_partial/`, `.agentremote_handoff/`, `.agentremote_inbox/`, and
-`AIMemory/`. Use `--include-memory` only when you intentionally want to sync
-agent-work-mem state.
+The default `standard` profile is intentionally conservative for headless
+project handoff. It excludes common generated folders, local agent state, and
+secret-like files before upload. Examples include `.git/`, `.venv/`, `venv/`,
+`node_modules/`, Python caches, `dist/`, `build/`, Unity-style generated
+folders such as `Library/`, `Temp/`, `Obj/`, `Logs/`, `UserSettings/`,
+local agent folders such as `.claude/`, `.codex/`, `.opencode/`, and
+secret-like patterns such as `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`,
+`*.pfx`, and `*.crt`.
+
+Available sync profiles:
+
+- `standard`: default safety profile for mixed projects.
+- `unity`: Unity generated folders such as `Library/`, `Logs/`, `Temp/`, `Obj/`, `UserSettings/`.
+- `python`: Python virtualenv/cache/build folders.
+- `node`: Node/frontend generated folders such as `node_modules/`, `.next/`, `coverage/`.
+- `llm`: large model/runtime output patterns such as `models/`, `tts/`, `audio_out/`, `*.gguf`.
+- `unity-python-llm`: combined profile for mixed Unity/Python/Node/LLM workspaces.
+
+`AIMemory/` is excluded unless you pass `--include-memory`. Even with
+`--include-memory`, volatile local runtime memory remains excluded by default:
+`AIMemory/agentremote_hosts/`, `AIMemory/swarm/calls/`,
+`AIMemory/swarm/events/`, `AIMemory/swarm/nodes/`, and
+`AIMemory/swarm/routes.md`. Use `--include-volatile-memory` only when you
+really want to copy local connection/topology runtime state.
+
+`AIMemory/work.log` is not excluded by the default log rules. Runtime log
+directories such as `logs/` and `Logs/` are excluded, but the project memory log
+can travel with AIMemory when `--include-memory` is used.
+
+If a user explicitly wants everything, pass `--all-files` or
+`--no-default-excludes`. This disables default/profile/volatile excludes and
+applies only the `--exclude` rules you provide. Protocol-reserved agentremote
+state such as partial upload directories remains protected by the transfer
+layer.
+
+Large many-file syncs use transfer endpoint backoff and a higher authenticated
+bulk-transfer rate limit. Zero-byte files such as `.gitkeep`, empty
+`__init__.py`, and empty `.jsonl` are supported. Restart/update the remote
+slave/daemon before relying on these fixes; an old remote server can still fail
+on zero-byte uploads.
 
 ## Usage Examples
 
@@ -386,6 +455,15 @@ agentremote worker --execute ask
 # Or send a manual report
 agentremote report master <handoff-id> "Tests passed. Suggested next step: release."
 ```
+
+`--wait-report` waits only for a report that comes back to the current project.
+It does not start a remote worker by itself. Use it when the receiver already
+has a worker/agent that will claim the inbox and send a report, preferably with
+a receiver-side `--callback-alias` back to this host. If waiting times out, use
+`agentremote calls show <call-id> --root <project>` and
+`agentremote calls wait <call-id> --root <project>` to
+inspect or resume the wait, then ask the receiver-side agent to run
+`agentremote inbox` or `agentremote worker --once --execute ask`.
 
 ### 4. Agent Swarm Foundation
 

@@ -2311,6 +2311,64 @@ class UsageScenarioTests(unittest.TestCase):
                 self.assertEqual(load_connections()["connections"]["::lab"]["host"], "127.0.0.1")
                 self.assertEqual(list(config.glob("connections.json.*.tmp")), [])
 
+    def test_s60_onboarding_prompt_mentions_wait_report_receiver_worker(self) -> None:
+        out = io.StringIO()
+        with redirect_stdout(out):
+            cli_main(["onboarding", "--ko"])
+        text = out.getvalue()
+        self.assertIn("`--wait-report` is not remote execution", text)
+        self.assertIn("agentremote worker --once --execute ask", text)
+        self.assertIn("한국어 요약", text)
+
+    def test_s61_calls_wait_timeout_prints_actionable_next_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install_work_mem(root)
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(root)
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    cli_main(["calls", "wait", "call-missing", "--timeout", "0"])
+                text = out.getvalue()
+                self.assertIn("Result: timeout", text)
+                self.assertIn("receiver/slave host", text)
+            finally:
+                os.chdir(previous_cwd)
+
+    def test_s62_calls_wait_respects_subcommand_root(self) -> None:
+        with tempfile.TemporaryDirectory() as project_tmp, tempfile.TemporaryDirectory() as cwd_tmp:
+            project_root = Path(project_tmp)
+            install_work_mem(project_root)
+            calls_dir = project_root / ".agentremote" / "calls"
+            calls_dir.mkdir(parents=True)
+            (calls_dir / "call-root.json").write_text(
+                json.dumps(
+                    {
+                        "callId": "call-root",
+                        "targetNode": "::remote",
+                        "state": "sent",
+                        "paths": ["/Project/AIMemory/incoming_handoffs/task.md"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(cwd_tmp)
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    cli_main(["calls", "wait", "call-missing", "--root", str(project_root), "--timeout", "0"])
+                text = out.getvalue()
+                self.assertIn("Result: timeout", text)
+                self.assertIn("receiver/slave host", text)
+                out = io.StringIO()
+                with redirect_stdout(out):
+                    cli_main(["calls", "show", "call-root", "--root", str(project_root)])
+                self.assertIn('"targetNode": "::remote"', out.getvalue())
+            finally:
+                os.chdir(previous_cwd)
+
 
 def request_json(base: str, method: str, path: str, payload: dict | None = None) -> dict:
     data = None if payload is None else json.dumps(payload).encode("utf-8")

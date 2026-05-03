@@ -31,11 +31,14 @@ def require_work_mem(root: Path, *, prompt_install: bool = True) -> None:
     if is_installed(root):
         return
     if prompt_install and sys.stdin.isatty():
-        answer = input(
-            "agent-remote-sync pairs with the agent in this project through "
-            f"agent-work-mem AIMemory at {root.resolve() / AIMEMORY_DIR}. "
-            "Install/setup it now? [y/N] "
-        ).strip().lower()
+        try:
+            answer = input(
+                "agent-remote-sync pairs with the agent in this project through "
+                f"agent-work-mem AIMemory at {root.resolve() / AIMEMORY_DIR}. "
+                "Install/setup it now? [y/N] "
+            ).strip().lower()
+        except EOFError:
+            answer = ""
         if answer in ("y", "yes"):
             install_work_mem(root)
             return

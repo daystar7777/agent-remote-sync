@@ -319,6 +319,9 @@ def main(argv: list[str] | None = None) -> None:
         help="remove partial files older than this many hours",
     )
 
+    onboarding_parser = subcommands.add_parser("onboarding", help="print the LLM onboarding prompt for agentremote")
+    onboarding_parser.add_argument("--ko", action="store_true", help="print Korean notes after the English prompt")
+
     doctor_parser = subcommands.add_parser("doctor", help="diagnose install path, checkout, and registered processes")
     doctor_parser.add_argument("--root", default=".", help="project root")
 
@@ -473,9 +476,16 @@ def main(argv: list[str] | None = None) -> None:
 
     calls_parser = subcommands.add_parser("calls", help="manage swarm call records").add_subparsers(dest="calls_command", required=True)
     calls_list_parser = calls_parser.add_parser("list", help="list local call records")
+    calls_list_parser.add_argument("--root", default=".", help="project root")
     calls_show = calls_parser.add_parser("show", help="show a specific call record")
     calls_show.add_argument("call_id", help="call ID to show")
-    calls_parser.add_parser("refresh", help="reconcile call records from inbox/AIMemory reports")
+    calls_show.add_argument("--root", default=".", help="project root")
+    calls_refresh = calls_parser.add_parser("refresh", help="reconcile call records from inbox/AIMemory reports")
+    calls_refresh.add_argument("--root", default=".", help="project root")
+    calls_wait = calls_parser.add_parser("wait", help="wait for a report for a call record")
+    calls_wait.add_argument("call_id", help="call ID to wait for")
+    calls_wait.add_argument("--root", default=".", help="project root")
+    calls_wait.add_argument("--timeout", type=int, default=300, help="wait timeout in seconds")
 
     processes_root = subcommands.add_parser("processes", help="swarm process management")
     processes_root.add_argument("--root", default=".", help="project root")
@@ -665,6 +675,8 @@ def main(argv: list[str] | None = None) -> None:
     try:
         if args.command == "doctor":
             doctor(Path(args.root))
+        elif args.command == "onboarding":
+            print_onboarding_prompt(korean=getattr(args, "ko", False))
         elif args.command == "cleanup":
             print_json(cleanup_stale_partials(Path(args.root), older_than_hours=args.older_than_hours))
         elif args.command == "bootstrap":
@@ -681,7 +693,7 @@ def main(argv: list[str] | None = None) -> None:
             pass
         elif args.command in ("nodes", "topology", "policy", "route"):
             pass
-        elif args.command in ("processes", "doctor", "stop-gui"):
+        elif args.command in ("processes", "doctor", "stop-gui", "onboarding"):
             pass
         elif args.command in ("setup", "map", "status", "uninstall"):
             pass
@@ -908,10 +920,12 @@ def main(argv: list[str] | None = None) -> None:
                 "sent",
             )
             print(f"call sent: {call_record['callId']}")
+            if args.wait_report and not args.callback_alias:
+                print_wait_report_callback_warning()
             if args.wait_report:
                 print(f"Waiting for report (timeout {args.timeout}s)...")
-                result = wait_for_handoff_report(Path.cwd(), call_record["callId"], timeout=args.timeout)
-                print(f"Result: {result.get('status', 'unknown')}")
+                result = wait_for_handoff_report(Path.cwd(), call_record["callId"], timeout=args.timeout, progress=True)
+                print_wait_report_result(result)
         elif args.command == "report":
             target = resolve_target(args.host, args.port, args.password, args)
             check_policy_alias(target.alias, args.policy, target.host)
@@ -1426,7 +1440,7 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"paths: {', '.join(remote_paths)}")
         elif args.command == "calls":
             if args.calls_command == "list":
-                records = list_call_records()
+                records = list_call_records(Path(args.root))
                 if not records:
                     print("No call records.")
                 else:
@@ -1434,16 +1448,19 @@ def main(argv: list[str] | None = None) -> None:
                         paths = ", ".join(record.get("paths", []))
                         print(f"{record['callId']}\t{record['targetNode']}\t{record['state']}\t{paths}")
             elif args.calls_command == "show":
-                record = read_call_record(args.call_id)
+                record = read_call_record(args.call_id, root=Path(args.root))
                 print_json(record)
             elif args.calls_command == "refresh":
-                updated = refresh_call_records(Path.cwd())
+                updated = refresh_call_records(Path(args.root))
                 if updated:
                     print(f"Refreshed {len(updated)} call record(s)")
                     for rec in updated:
                         print(f"  {rec['callId']}: {rec['state']}")
                 else:
                     print("No call records were updated")
+            elif args.calls_command == "wait":
+                result = wait_for_handoff_report(Path(args.root), args.call_id, timeout=args.timeout, progress=True)
+                print_wait_report_result(result)
         elif args.command == "processes":
             if args.processes_command in (None, "list"):
                 root = Path(args.root).resolve()
@@ -1579,10 +1596,12 @@ def main(argv: list[str] | None = None) -> None:
             instruction = tell(target.host, target.port, target.password, args.task, token=target.token, local_root=Path.cwd(), from_name=args.from_name, alias=target.alias, paths=args.path, expect_report=args.expect_report, auto_run=args.auto_run, callback_alias=args.callback_alias, tls_fingerprint=target.tls_fingerprint, tls_insecure=target.tls_insecure, ca_file=target.ca_file)
             call_record = save_call_record(target.alias, instruction.get("id"), instruction.get("handoffId", ""), args.path or [], "sent")
             print(f"ask sent: {call_record['callId']}")
+            if args.wait_report and not args.callback_alias:
+                print_wait_report_callback_warning()
             if args.wait_report:
                 print(f"Waiting for report (timeout {args.timeout}s)...")
-                result = wait_for_handoff_report(Path.cwd(), call_record["callId"], timeout=args.timeout)
-                print(f"Result: {result.get('status', 'unknown')}")
+                result = wait_for_handoff_report(Path.cwd(), call_record["callId"], timeout=args.timeout, progress=True)
+                print_wait_report_result(result)
         elif args.command == "sync-project":
             target = resolve_target(args.name, args.port, args.password, args)
             check_policy_alias(target.alias, args.policy)
@@ -2000,6 +2019,8 @@ def command_root(args: argparse.Namespace) -> Path:
         return Path(args.root)
     if args.command == "worker":
         return Path(args.root)
+    if args.command == "calls":
+        return Path(getattr(args, "root", "."))
     if args.command == "cleanup":
         return Path(args.root)
     if args.command == "share":
@@ -2672,19 +2693,149 @@ def resolve_handoff_cli_args(args: argparse.Namespace) -> tuple[str, str]:
     return local_path, task
 
 
-def wait_for_handoff_report(root: Path, call_id: str, *, timeout: int = 300) -> dict:
+def wait_for_handoff_report(root: Path, call_id: str, *, timeout: int = 300, progress: bool = False) -> dict:
     import time as t
     root = root.resolve()
     deadline = t.time() + timeout
+    next_notice = t.time() + min(15, max(1, timeout))
+    call_path = root / ".agentremote" / "calls" / f"{call_id}.json"
+    last_record: dict | None = read_call_record(call_id, root=root) if call_id and call_path.exists() else None
     while t.time() < deadline:
         refresh_call_records(root)
         record = read_call_record(call_id, root=root) if call_id and (root / ".agentremote" / "calls" / f"{call_id}.json").exists() else None
+        if record:
+            last_record = record
         if record and record.get("state") in ("reported", "failed"):
             result = dict(record)
             result["status"] = str(record.get("state", "unknown"))
             return result
+        now = t.time()
+        if progress and now >= next_notice:
+            state = str((record or {}).get("state", "pending"))
+            target = str((record or {}).get("targetNode", ""))
+            remaining = max(0, int(deadline - now))
+            print(f"Still waiting for report: call={call_id} state={state} target={target} remaining={remaining}s")
+            next_notice = now + 30
         t.sleep(1)
-    return {"status": "timeout", "callId": call_id}
+    result = {"status": "timeout", "callId": call_id}
+    if last_record:
+        result.update(
+            {
+                "state": last_record.get("state"),
+                "targetNode": last_record.get("targetNode"),
+                "instructionId": last_record.get("instructionId"),
+                "handoffId": last_record.get("handoffId"),
+                "paths": last_record.get("paths", []),
+            }
+        )
+    result["message"] = "No STATUS_REPORT arrived before timeout."
+    result["nextSteps"] = wait_report_next_steps(result)
+    return result
+
+
+def print_wait_report_callback_warning() -> None:
+    print("Note: --wait-report only observes reports that arrive back in this project.")
+    print("      The receiver must run a local agent/worker and send a STATUS_REPORT back.")
+    print("      For automatic return, the receiver usually needs a saved --callback-alias to this host.")
+
+
+def print_wait_report_result(result: dict) -> None:
+    status = result.get("status", "unknown")
+    print(f"Result: {status}")
+    if status == "timeout":
+        if result.get("message"):
+            print(str(result["message"]))
+        for step in result.get("nextSteps", []):
+            print(f"- {step}")
+
+
+def wait_report_next_steps(result: dict) -> list[str]:
+    call_id = str(result.get("callId", ""))
+    instruction_id = str(result.get("instructionId", ""))
+    handoff_id = str(result.get("handoffId", ""))
+    paths = result.get("paths", [])
+    first_path = str(paths[0]) if isinstance(paths, list) and paths else ""
+    steps = [
+        "On the receiver/slave host, ask the local agent to inspect the inbox and process the instruction.",
+        "The receiver can run `agentremote worker --once --execute ask` from the project root that started slave/daemon.",
+    ]
+    if instruction_id:
+        steps.append(f"Receiver inbox instruction id: {instruction_id}")
+    if handoff_id:
+        steps.append(f"Expected report parent handoff id: {handoff_id}")
+    if first_path:
+        steps.append(f"Attached/related remote path: {first_path}")
+    if call_id:
+        steps.append(f"Resume waiting later with `agentremote calls wait {call_id} --root <sender-project>`.")
+    return steps
+
+
+AGENTREMOTE_ONBOARDING_PROMPT = """# agentremote LLM Onboarding Prompt
+
+You are operating `agentremote`, a cross-host file/folder sync and remote-agent
+handoff tool. Treat it as a safe transfer and coordination layer, not as remote
+shell access.
+
+## First checks
+
+1. Run `agentremote doctor --root <project>` when starting in a repo or after install.
+2. Run `agentremote connections` to find saved hosts. Saved aliases may be typed
+   with or without the visible `::` prefix.
+3. Run `agentremote status --root <project>` and `agentremote processes --root <project>`
+   when behavior looks stuck or a GUI port is occupied.
+
+## File and project sync
+
+- For safe project sync, prefer:
+  `agentremote sync-project <host> <remote-dir> --local <project> --dry-run --include-memory --profile unity-python-llm`
+- Add `--yes` only after reviewing the plan.
+- Use `--all-files` or `--no-default-excludes` only when the user explicitly wants
+  default generated/secret/volatile excludes disabled.
+- Use `--include-memory` to carry AIMemory context. Do not use
+  `--include-volatile-memory` unless the user wants local connection/topology runtime state too.
+
+## Handoff and reports
+
+- `agentremote tell <host> "<task>"` sends instruction only.
+- `agentremote handoff <host> <local-path> "<task>"` uploads files then sends instruction.
+- Do not upload into `.agentremote_*` paths; those are protocol-reserved. Use a
+  project path such as `/Project/AIMemory/incoming_handoffs` for human-readable attachments.
+- `--auto-run` only marks the instruction eligible. The receiver still needs a
+  local worker/agent to claim and process it.
+- `--wait-report` is not remote execution. It only waits for a STATUS_REPORT to
+  come back to this project. Before using it, confirm one of these is true:
+  1. the receiver has a running worker and a saved `--callback-alias` back to this host, or
+  2. a human/agent on the receiver will manually run the work and send `agentremote report`.
+- If no report arrives, run `agentremote calls show <call-id> --root <project>`
+  or `agentremote calls wait <call-id> --root <project>`, then ask the
+  receiver-side agent to run `agentremote inbox`, `agentremote inbox --read <id>`,
+  and `agentremote worker --once --execute ask` from the slave project root.
+
+## Safety
+
+- Never echo passwords, bearer tokens, or private key contents.
+- Prefer Tailscale/private networks or HTTPS fingerprint pinning.
+- Ask before delete/overwrite unless the user already gave explicit permission.
+- For blocked permissions, storage problems, conflicts, or missing receiver worker,
+  report the blocker clearly instead of silently waiting.
+"""
+
+
+AGENTREMOTE_ONBOARDING_KO_NOTES = """## 한국어 요약
+
+- 먼저 `agentremote doctor --root <project>`로 실제 import 경로와 실행 파일을 확인하세요.
+- 대형 프로젝트는 `sync-project --dry-run --include-memory --profile unity-python-llm`로 계획부터 봅니다.
+- 사용자가 정말 원할 때만 `--all-files` 또는 `--no-default-excludes`를 사용합니다.
+- `--wait-report`는 원격 실행이 아닙니다. 원격 host에서 worker/agent가 inbox를 처리하고 report를 다시 보내야 완료됩니다.
+- 멈춘 것처럼 보이면 `agentremote calls show <call-id> --root <project>`와 `agentremote calls wait <call-id> --root <project>`를 사용하고, 원격 에이전트에게 `agentremote worker --once --execute ask`를 실행하게 하세요.
+"""
+
+
+def print_onboarding_prompt(*, korean: bool = False) -> None:
+    print(AGENTREMOTE_ONBOARDING_PROMPT.rstrip())
+    if korean:
+        print()
+        print(AGENTREMOTE_ONBOARDING_KO_NOTES.rstrip())
 
 
 def daemon_password_arg(args: argparse.Namespace) -> str | None:

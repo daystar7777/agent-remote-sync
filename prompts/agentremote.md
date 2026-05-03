@@ -14,6 +14,19 @@ When asked to install from GitHub:
 5. Run `agentremote doctor`.
 6. Report the installed version and any missing runtime requirements.
 
+If the command appears to run old code, `agentremote doctor --root <project>`
+must be the first diagnostic. It shows the executable path, imported package
+path, detected checkout, AIMemory status, and registered local processes. If
+the imported checkout differs from the intended repository, stop old
+agentremote processes and reinstall from the intended checkout with
+`python -m pip install -e .`.
+
+You can print the packaged onboarding prompt with:
+
+```powershell
+agentremote onboarding --ko
+```
+
 ## Saved Connections
 
 When the user gives a short target name such as `XXX`, first check whether it is
@@ -105,3 +118,44 @@ When asked to sync or hand off work without a browser:
 9. For automatic report return, include `--callback-alias <alias>` only when that
    alias is already saved on the receiving host. Never place passwords or bearer
    tokens in handoff text.
+
+Do not use `--wait-report` as if it were remote execution. `--wait-report` only
+waits for a STATUS_REPORT that arrives back in the current project. Before
+using it, confirm that one of these is true:
+
+1. the receiver has a running worker/agent and a saved callback alias back to
+   this host, or
+2. a human/agent on the receiver will manually inspect the inbox, do the work,
+   and send a report back.
+
+If a handoff appears stuck:
+
+```powershell
+agentremote calls list --root <project>
+agentremote calls show <call-id> --root <project>
+agentremote calls wait <call-id> --root <project> --timeout 300
+agentremote status --root .
+agentremote processes --root .
+```
+
+Then ask the receiver-side agent, from the project root that started
+slave/daemon:
+
+```powershell
+agentremote inbox
+agentremote inbox --read <instruction-id>
+agentremote worker --once --execute ask
+```
+
+Avoid remote destinations under `.agentremote_*`; those are protocol-reserved.
+For human-readable handoff attachments, use a project path such as
+`/Project/AIMemory/incoming_handoffs`.
+
+For safe project sync, prefer:
+
+```powershell
+agentremote sync-project <host> <remote-dir> --local <project> --dry-run --include-memory --profile unity-python-llm
+```
+
+Add `--yes` only after reviewing the plan. Use `--all-files` only when the user
+explicitly wants default generated/secret/volatile excludes disabled.

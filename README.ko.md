@@ -111,6 +111,18 @@ python -m pip install -e .
 agentremote doctor
 ```
 
+명령이 예전 코드로 실행되는 것처럼 보이면 `agentremote doctor --root <project>`를
+먼저 확인하세요. 실행 파일 경로, import 중인 패키지 경로, 감지된 checkout,
+AIMemory 상태, 등록된 로컬 프로세스를 보여줍니다. import 중인 checkout이
+의도한 저장소와 다르면 오래된 agentremote 프로세스를 종료한 뒤, 원하는 저장소에서
+`python -m pip install -e .`를 다시 실행하세요.
+
+설치 후 LLM이 바로 참고할 수 있는 명령 가이드는 다음으로 출력할 수 있습니다.
+
+```powershell
+agentremote onboarding --ko
+```
+
 ## 빠른 시작
 
 사람과 에이전트가 먼저 쓰는 쉬운 명령 표면은 다음과 같습니다.
@@ -126,6 +138,7 @@ agentremote ask lab "테스트 실행하고 보고해줘" --wait-report
 agentremote handoff lab ./LLL "검토하고 보고해줘"
 agentremote map
 agentremote status
+agentremote doctor
 agentremote uninstall
 ```
 
@@ -142,6 +155,7 @@ agentremote sync-project lab --yes
 agentremote ask lab "테스트 실행하고 보고해줘" --wait-report
 agentremote map
 agentremote status
+agentremote processes
 ```
 
 노드, 저장된 데몬 프로필, 로컬 프로세스, 최근 콜, 승인 대기를 한 화면에서
@@ -201,6 +215,25 @@ agentremote status
 보안을 위해 승인 세부내용, 토큰 hash, 저장된 연결 토큰은 대시보드
 payload에 노출하지 않습니다.
 
+### 프로세스와 GUI 관리
+
+`agentremote processes`는 현재 프로젝트에 등록된 로컬 slave/master/worker 또는
+controller GUI 프로세스를 보여줍니다. `7180` 같은 GUI 포트가 오래된 세션에
+잡혀 있을 때 어느 프로세스가 살아 있는지 확인하는 용도로도 유용합니다.
+
+```powershell
+agentremote processes
+agentremote processes --root C:\work\VTubes
+agentremote processes stop <process-id>
+agentremote processes stop-gui
+agentremote stop-gui --root C:\work\VTubes
+agentremote processes forget <process-id>
+```
+
+`stop`과 `stop-gui`는 레지스트리 메타데이터가 현재 프로젝트 루트/PID fingerprint와
+맞지 않으면 프로세스를 종료하지 않습니다. `forget`은 오래된 레지스트리 항목만
+지우며, 실제 프로세스를 종료하지 않습니다.
+
 ### 데몬 프로필
 
 반복해서 사용할 프로젝트는 데몬 프로필로 저장해둘 수 있습니다. 프로필에는
@@ -246,16 +279,50 @@ agentremote daemon uninstall --root .
 agentremote sync-project lab
 agentremote sync-project lab --yes
 agentremote sync-project lab --local ./subproject /remote/subproject --yes
-agentremote sync-project lab --include-memory
-agentremote sync-project lab --exclude "*.log"
+agentremote sync-project lab /Project --include-memory --profile unity-python-llm
+agentremote sync-project lab /Project --include-memory --profile unity-python-llm --yes
+agentremote sync-project lab /Project --all-files --dry-run
+agentremote sync-project lab /Project --all-files --exclude node_modules --yes
 ```
 
-프로젝트 싱크는 생성물과 로컬 상태 폴더를 기본 제외합니다: `.git/`,
-`.venv/`, `venv/`, `node_modules/`, `__pycache__/`, `.pytest_cache/`,
-`.mypy_cache/`, `.ruff_cache/`, `dist/`, `build/`, `.agentremote/`,
-`.agentremote_partial/`, `.agentremote_handoff/`, `.agentremote_inbox/`, `AIMemory/`.
-agent-work-mem 상태까지 의도적으로 옮기고 싶을 때만 `--include-memory`를
-사용하세요.
+기본 `standard` profile은 헤드리스 프로젝트 핸드오프를 안전하게 하기 위한
+보수적 기본값입니다. 업로드 전에 흔한 생성물, 로컬 에이전트 상태, 비밀 파일
+패턴을 제외합니다. 예를 들어 `.git/`, `.venv/`, `venv/`, `node_modules/`,
+Python 캐시, `dist/`, `build/`, Unity 계열 `Library/`, `Temp/`, `Obj/`,
+`Logs/`, `UserSettings/`, 로컬 에이전트 폴더 `.claude/`, `.codex/`,
+`.opencode/`, 그리고 `.env`, `.env.*`, `*.pem`, `*.key`, `*.p12`, `*.pfx`,
+`*.crt` 같은 비밀 파일 패턴이 제외됩니다.
+
+사용 가능한 sync profile:
+
+- `standard`: 혼합 프로젝트를 위한 기본 안전 profile
+- `unity`: Unity 생성 폴더 `Library/`, `Logs/`, `Temp/`, `Obj/`, `UserSettings/`
+- `python`: Python virtualenv/cache/build 폴더
+- `node`: `node_modules/`, `.next/`, `coverage/` 같은 Node/frontend 생성물
+- `llm`: `models/`, `tts/`, `audio_out/`, `*.gguf` 같은 대형 모델/런타임 출력
+- `unity-python-llm`: Unity/Python/Node/LLM이 섞인 워크스페이스용 조합 profile
+
+`AIMemory/`는 `--include-memory`를 줄 때만 포함됩니다. 다만
+`--include-memory`를 써도 로컬 런타임 성격의 volatile memory는 기본 제외됩니다:
+`AIMemory/agentremote_hosts/`, `AIMemory/swarm/calls/`,
+`AIMemory/swarm/events/`, `AIMemory/swarm/nodes/`, `AIMemory/swarm/routes.md`.
+로컬 연결/토폴로지 런타임 상태까지 정말 옮기고 싶을 때만
+`--include-volatile-memory`를 사용하세요.
+
+`AIMemory/work.log`는 기본 로그 제외 규칙에 걸리지 않습니다. `logs/`, `Logs/`
+같은 런타임 로그 디렉터리는 제외하지만, `--include-memory`를 쓰면 프로젝트
+작업 기억 로그는 함께 이동할 수 있습니다.
+
+사용자가 명시적으로 “전부 올리기”를 원하면 `--all-files` 또는
+`--no-default-excludes`를 사용합니다. 이 옵션은 기본/profile/volatile 제외를
+끄고 사용자가 직접 준 `--exclude`만 적용합니다. 단, partial upload 디렉터리처럼
+agentremote 프로토콜 내부 예약 상태는 전송 계층에서 계속 보호됩니다.
+
+대량 파일 sync는 transfer endpoint backoff와 더 높은 authenticated bulk-transfer
+rate limit을 사용합니다. `.gitkeep`, 빈 `__init__.py`, 빈 `.jsonl` 같은 0바이트
+파일도 지원합니다. 이 수정에 의존하려면 리모트 slave/daemon도 새 버전으로
+업데이트하고 재시작해야 합니다. 오래된 리모트 서버는 여전히 0바이트 업로드에서
+실패할 수 있습니다.
 
 ## 사용 예제
 
@@ -323,6 +390,15 @@ agentremote worker --execute ask
 # 또는 수동 보고 전송
 agentremote report master <handoff-id> "테스트 통과. 다음 단계는 릴리즈 준비."
 ```
+
+`--wait-report`는 현재 프로젝트로 되돌아오는 보고를 기다리는 기능일 뿐, 원격
+worker를 자동으로 시작하지 않습니다. 리모트 쪽에 inbox를 claim하고 report를
+되돌려 보낼 worker/agent가 있을 때 사용하세요. 가능하면 리모트 호스트에 이쪽으로
+돌아오는 `--callback-alias`가 저장되어 있어야 자동 보고가 쉽습니다. 대기가
+timeout되면 `agentremote calls show <call-id> --root <project>`와
+`agentremote calls wait <call-id> --root <project>`로 상태를 확인하거나 다시 기다리고, 리모트
+에이전트에게 `agentremote inbox` 또는 `agentremote worker --once --execute ask`를
+실행하게 하세요.
 
 ### 4. 에이전트 스웜 기반 흐름
 
