@@ -571,12 +571,33 @@ Run a receiving worker:
 ```powershell
 agentremote worker --once
 agentremote worker --execute ask
+agentremote worker --execute yes --agent-command "python ./agent_bridge.py"
+agentremote daemon serve --root . --auto-worker --worker-execute yes --worker-agent-command "python ./agent_bridge.py"
 ```
 
 Worker mode only executes commands that are explicitly written as
 `agentremote-run: <command>` lines, and only when `--execute ask` or
 `--execute yes` is supplied. Without `--once`, the worker polls continuously for
 eligible `autoRun` handoffs.
+
+For natural-language handoffs with no `agentremote-run:` lines, configure a
+local agent bridge with `--agent-command` or, for a long-running slave/daemon,
+`--auto-worker --worker-agent-command`. The bridge command runs on the receiver
+host with these environment variables:
+
+- `AGENTREMOTE_BRIDGE_INPUT`: JSON request file containing the task, handoff id,
+  expected report, and related paths.
+- `AGENTREMOTE_BRIDGE_OUTPUT`: markdown file path the bridge should write as
+  the final report.
+- `AGENTREMOTE_ROOT`, `AGENTREMOTE_INSTRUCTION_ID`,
+  `AGENTREMOTE_HANDOFF_ID`, and `AGENTREMOTE_HANDOFF_FILE`.
+
+If the bridge writes `AGENTREMOTE_BRIDGE_OUTPUT`, that file becomes the
+`STATUS_REPORT`; otherwise stdout is used. This is intentionally opt-in because
+it lets remote instructions drive a local agent command. Use it only for trusted
+nodes and narrow project roots. Worker-policy allowlists apply to
+instruction-supplied `agentremote-run:` commands; the bridge command is
+operator-configured and gated by the approval policy.
 
 For execution, the receiver also needs a local worker command policy. Start with
 a strict allowlist and keep it inside the project root:

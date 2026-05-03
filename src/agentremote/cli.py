@@ -144,6 +144,7 @@ def main(argv: list[str] | None = None) -> None:
     )
     slave.add_argument("--policy", choices=["warn", "strict", "off"], default="off", help="slave-side whitelist enforcement")
     slave.add_argument("--node-name", default="", help="friendly node name for topology identification")
+    add_embedded_worker_args(slave)
 
     connect = subcommands.add_parser("connect", help="authenticate and save a connection alias")
     connect.add_argument("name", help="short name for the connection")
@@ -300,6 +301,8 @@ def main(argv: list[str] | None = None) -> None:
     worker.add_argument("--from-name", default="agentremote-worker", help="sender name for worker reports")
     worker.add_argument("--timeout", type=int, default=600, help="per-command timeout in seconds")
     worker.add_argument("--interval", type=float, default=5.0, help="daemon polling interval in seconds")
+    worker.add_argument("--agent-command", default="", help="local bridge command for natural-language handoffs with no agentremote-run lines")
+    worker.add_argument("--agent-command-shell", action="store_true", help="run --agent-command through the system shell")
     worker.add_argument(
         "--max-iterations",
         type=int,
@@ -353,6 +356,7 @@ def main(argv: list[str] | None = None) -> None:
     daemon_serve.add_argument("--console", choices=["auto", "yes", "no"], default="auto", help="open in visible console")
     daemon_serve.add_argument("--policy", choices=["warn", "strict", "off"], default="off", help="slave-side whitelist enforcement")
     daemon_serve.add_argument("--node-name", default="", help="friendly node name for topology identification")
+    add_embedded_worker_args(daemon_serve)
 
     daemon_status = daemon_sp.add_parser("status", help="show local daemon status")
     daemon_status.add_argument("--root", default=".", help="project root")
@@ -559,6 +563,7 @@ def main(argv: list[str] | None = None) -> None:
         help="per-client rate limit for authenticated transfer endpoints",
     )
     share_parser.add_argument("--verbose", action="store_true")
+    add_embedded_worker_args(share_parser)
 
     open_parser = subcommands.add_parser("open", help="open browser UI to a connection")
     open_parser.add_argument("name", help="saved connection alias")
@@ -719,6 +724,15 @@ def main(argv: list[str] | None = None) -> None:
                 verbose=args.verbose,
                 policy=args.policy,
                 node_name=args.node_name,
+                auto_worker=args.auto_worker,
+                worker_execute=args.worker_execute,
+                worker_include_manual=args.worker_include_manual,
+                worker_report_to=args.worker_report_to,
+                worker_from_name=args.worker_from_name,
+                worker_timeout=args.worker_timeout,
+                worker_interval=args.worker_interval,
+                worker_agent_command=args.worker_agent_command,
+                worker_agent_command_shell=args.worker_agent_command_shell,
             )
         elif args.command == "connect":
             host, port = split_host_port(args.host, args.port)
@@ -969,6 +983,8 @@ def main(argv: list[str] | None = None) -> None:
                         timeout=args.timeout,
                         interval=args.interval,
                         max_iterations=args.max_iterations or None,
+                        agent_command=args.agent_command,
+                        agent_command_shell=args.agent_command_shell,
                     )
                 )
             else:
@@ -981,6 +997,8 @@ def main(argv: list[str] | None = None) -> None:
                         report_to=args.report_to,
                         from_name=args.from_name,
                         timeout=args.timeout,
+                        agent_command=args.agent_command,
+                        agent_command_shell=args.agent_command_shell,
                     )
                 )
         elif args.command == "daemon":
@@ -1004,6 +1022,15 @@ def main(argv: list[str] | None = None) -> None:
                     verbose=args.verbose,
                     policy=args.policy,
                     node_name=args.node_name,
+                    auto_worker=args.auto_worker,
+                    worker_execute=args.worker_execute,
+                    worker_include_manual=args.worker_include_manual,
+                    worker_report_to=args.worker_report_to,
+                    worker_from_name=args.worker_from_name,
+                    worker_timeout=args.worker_timeout,
+                    worker_interval=args.worker_interval,
+                    worker_agent_command=args.worker_agent_command,
+                    worker_agent_command_shell=args.worker_agent_command_shell,
                 )
             elif args.daemon_command == "status":
                 root = Path(args.root).resolve()
@@ -1581,7 +1608,27 @@ def main(argv: list[str] | None = None) -> None:
             firewall = args.firewall
             if firewall == "auto":
                 firewall = "no" if is_loopback_bind_host(args.host) else "ask"
-            run_slave(Path(args.root), args.port, daemon_password_arg(args), args.host, model_id="agentremote-slave", firewall=firewall, authenticated_transfer_per_minute=args.authenticated_transfer_per_minute, policy=args.policy, node_name=args.node_name, verbose=args.verbose)
+            run_slave(
+                Path(args.root),
+                args.port,
+                daemon_password_arg(args),
+                args.host,
+                model_id="agentremote-slave",
+                firewall=firewall,
+                authenticated_transfer_per_minute=args.authenticated_transfer_per_minute,
+                policy=args.policy,
+                node_name=args.node_name,
+                verbose=args.verbose,
+                auto_worker=args.auto_worker,
+                worker_execute=args.worker_execute,
+                worker_include_manual=args.worker_include_manual,
+                worker_report_to=args.worker_report_to,
+                worker_from_name=args.worker_from_name,
+                worker_timeout=args.worker_timeout,
+                worker_interval=args.worker_interval,
+                worker_agent_command=args.worker_agent_command,
+                worker_agent_command_shell=args.worker_agent_command_shell,
+            )
         elif args.command == "open":
             target = resolve_target(args.name, args.port, args.password, args)
             check_policy_alias(target.alias, args.policy)
@@ -1885,6 +1932,27 @@ def add_policy_arg(parser: argparse.ArgumentParser) -> None:
         default="warn",
         help="whitelist enforcement: warn for unlisted, strict fail-on-unlisted, off skip check",
     )
+
+
+def add_embedded_worker_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--auto-worker", action="store_true", help="run a worker loop inside this slave/daemon process")
+    parser.add_argument(
+        "--worker-execute",
+        choices=["never", "ask", "yes"],
+        default="never",
+        help="embedded worker execution mode; use yes only on trusted hosts",
+    )
+    parser.add_argument("--worker-include-manual", action="store_true", help="embedded worker may process non-autoRun instructions")
+    parser.add_argument("--worker-report-to", default="", help="override callback alias for embedded worker STATUS_REPORTs")
+    parser.add_argument("--worker-from-name", default="agentremote-auto-worker", help="sender name for embedded worker reports")
+    parser.add_argument("--worker-timeout", type=int, default=600, help="embedded worker per-command/bridge timeout")
+    parser.add_argument("--worker-interval", type=float, default=5.0, help="embedded worker polling interval")
+    parser.add_argument(
+        "--worker-agent-command",
+        default="",
+        help="local bridge command for natural-language handoffs with no agentremote-run lines",
+    )
+    parser.add_argument("--worker-agent-command-shell", action="store_true", help="run --worker-agent-command through the system shell")
 
 
 def is_loopback_bind_host(host: str) -> bool:
@@ -2758,6 +2826,8 @@ def wait_report_next_steps(result: dict) -> list[str]:
     steps = [
         "On the receiver/slave host, ask the local agent to inspect the inbox and process the instruction.",
         "The receiver can run `agentremote worker --once --execute ask` from the project root that started slave/daemon.",
+        "For unattended future work, restart the receiver with `--auto-worker --worker-execute yes`.",
+        "For natural-language tasks, the receiver also needs a trusted `--worker-agent-command` bridge.",
     ]
     if instruction_id:
         steps.append(f"Receiver inbox instruction id: {instruction_id}")
@@ -2810,6 +2880,14 @@ shell access.
   or `agentremote calls wait <call-id> --root <project>`, then ask the
   receiver-side agent to run `agentremote inbox`, `agentremote inbox --read <id>`,
   and `agentremote worker --once --execute ask` from the slave project root.
+- For unattended receiver-side processing, the receiver must start slave/daemon
+  with `--auto-worker --worker-execute yes`. This only runs explicit
+  `agentremote-run:` lines unless a trusted local bridge is configured with
+  `--worker-agent-command`.
+- For natural-language handoffs, the bridge command receives
+  `AGENTREMOTE_BRIDGE_INPUT` and writes a markdown report to
+  `AGENTREMOTE_BRIDGE_OUTPUT` or stdout. `--auto-run` alone does not wake a
+  remote LLM.
 
 ## Safety
 
@@ -2828,6 +2906,8 @@ AGENTREMOTE_ONBOARDING_KO_NOTES = """## 한국어 요약
 - 사용자가 정말 원할 때만 `--all-files` 또는 `--no-default-excludes`를 사용합니다.
 - `--wait-report`는 원격 실행이 아닙니다. 원격 host에서 worker/agent가 inbox를 처리하고 report를 다시 보내야 완료됩니다.
 - 멈춘 것처럼 보이면 `agentremote calls show <call-id> --root <project>`와 `agentremote calls wait <call-id> --root <project>`를 사용하고, 원격 에이전트에게 `agentremote worker --once --execute ask`를 실행하게 하세요.
+- 무인 처리를 원하면 받는 쪽 slave/daemon을 `--auto-worker --worker-execute yes`로 시작해야 합니다.
+- 자연어 핸드오프는 `--worker-agent-command`로 신뢰된 로컬 에이전트 브리지를 연결해야 자동 처리됩니다. `--auto-run`만으로 원격 LLM이 깨어나지는 않습니다.
 """
 
 

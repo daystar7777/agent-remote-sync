@@ -501,9 +501,27 @@ agentremote report lab <handoff-id> "테스트 통과."
 ```powershell
 agentremote worker --once
 agentremote worker --execute ask
+agentremote worker --execute yes --agent-command "python ./agent_bridge.py"
+agentremote daemon serve --root . --auto-worker --worker-execute yes --worker-agent-command "python ./agent_bridge.py"
 ```
 
 worker는 `agentremote-run: <command>`로 명시된 명령만 실행합니다. 그리고 `--execute ask` 또는 `--execute yes`가 있어야 실제 실행합니다. `--once`를 빼면 `autoRun` 핸드오프를 계속 폴링하는 데몬 모드로 동작합니다.
+
+`agentremote-run:`이 없는 자연어 핸드오프를 자동 처리하려면 받는 쪽에 로컬
+에이전트 브리지를 명시해야 합니다. 단발 worker에는 `--agent-command`, 계속
+떠 있는 slave/daemon에는 `--auto-worker --worker-agent-command`를 사용합니다.
+브리지 명령은 받는 쪽 호스트에서 실행되며 다음 환경변수를 받습니다.
+
+- `AGENTREMOTE_BRIDGE_INPUT`: task, handoff id, expected report, 관련 경로가 담긴 JSON 요청 파일
+- `AGENTREMOTE_BRIDGE_OUTPUT`: 브리지가 최종 보고서를 써야 하는 markdown 파일
+- `AGENTREMOTE_ROOT`, `AGENTREMOTE_INSTRUCTION_ID`, `AGENTREMOTE_HANDOFF_ID`, `AGENTREMOTE_HANDOFF_FILE`
+
+브리지가 `AGENTREMOTE_BRIDGE_OUTPUT` 파일을 쓰면 그 내용이 `STATUS_REPORT`가
+되고, 파일이 비어 있으면 stdout이 보고로 사용됩니다. 이 기능은 원격 지시가
+로컬 에이전트 명령을 구동하게 만드는 강한 기능이므로, 신뢰된 노드와 좁은
+프로젝트 루트에서만 opt-in으로 사용하세요. worker-policy allowlist는
+instruction 안에 들어온 `agentremote-run:` 명령에 적용됩니다. 브리지 명령은
+운영자가 직접 설정한 명령이며 approval policy의 승인을 따릅니다.
 
 실행하려면 받는 쪽 프로젝트에 로컬 worker command policy도 필요합니다. 좁은
 allowlist에서 시작하는 것을 권장합니다.

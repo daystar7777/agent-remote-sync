@@ -5,6 +5,7 @@ import io
 import hashlib
 import json
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -36,11 +37,11 @@ from agentremote.headless import handoff, pull, push, report, tell
 from agentremote.inbox import create_instruction, list_instructions, read_instruction
 from agentremote.master import AgentRemoteMasterServer, MasterState, RemoteClient, build_upload_plan
 from agentremote.security import SecurityConfig, SecurityState
-from agentremote.slave import AgentRemoteSlaveServer, SlaveState
+from agentremote.slave import AgentRemoteSlaveServer, SlaveState, start_embedded_worker
 from agentremote.state import TransferLogger, logs_dir, prune_transfer_logs
 from agentremote.sync import exclude_match, sync_plan_push, sync_pull, sync_push, write_plan
 from agentremote.tls import ensure_self_signed_cert, wrap_server_socket
-from agentremote.worker import run_worker_loop
+from agentremote.worker import run_worker_loop, run_worker_once
 from agentremote.worker_policy import allow_rule
 from agentremote.workmem import install_work_mem, is_installed, require_work_mem
 
@@ -1826,6 +1827,67 @@ class UsageScenarioTests(unittest.TestCase):
             self.assertEqual(result["processed"], 1)
             self.assertEqual(result["idle"], 1)
             self.assertEqual(list_instructions(root)[0]["state"], "claimed")
+
+    def test_s47b_worker_agent_bridge_processes_natural_language(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install_work_mem(root)
+            instruction = create_instruction(
+                root,
+                "Register the Aro model in LM Studio and report back.",
+                auto_run=True,
+                expect_report="Report success or blockers.",
+            )
+            bridge = root / "bridge.py"
+            bridge.write_text(
+                "import json, os\n"
+                "from pathlib import Path\n"
+                "request = json.loads(Path(os.environ['AGENTREMOTE_BRIDGE_INPUT']).read_text(encoding='utf-8'))\n"
+                "Path(os.environ['AGENTREMOTE_BRIDGE_OUTPUT']).write_text(\n"
+                "    '# Bridge Report\\n\\nStatus: success\\nTask: ' + request['task'], encoding='utf-8'\n"
+                ")\n",
+                encoding="utf-8",
+            )
+            command = f'"{sys.executable}" "{bridge}"'
+            with redirect_stdout(io.StringIO()):
+                result = run_worker_once(root, execute="yes", agent_command=command)
+            self.assertEqual(result["state"], "completed")
+            completed = read_instruction(root, instruction["id"])
+            self.assertEqual(completed["state"], "completed")
+            self.assertEqual(completed["agentBridge"]["exitCode"], 0)
+            report_path = root / completed["report"]["handoffFile"]
+            self.assertIn("Bridge Report", report_path.read_text(encoding="utf-8"))
+            self.assertIn("Status: success", report_path.read_text(encoding="utf-8"))
+
+    def test_s47c_slave_embedded_worker_can_process_agent_bridge(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            install_work_mem(root)
+            instruction = create_instruction(root, "Handle this through the embedded worker.", auto_run=True)
+            bridge = root / "embedded_bridge.py"
+            bridge.write_text(
+                "import os\n"
+                "from pathlib import Path\n"
+                "Path(os.environ['AGENTREMOTE_BRIDGE_OUTPUT']).write_text('embedded ok', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+            state = SlaveState(root, "secret", auto_worker=True, agent_bridge=True)
+            self.assertIn("auto-worker", state.node_info(authenticated=True)["capabilities"])
+            self.assertIn("agent-bridge", state.node_info(authenticated=True)["capabilities"])
+            thread = start_embedded_worker(
+                state,
+                enabled=True,
+                execute="yes",
+                interval=0.01,
+                max_iterations=2,
+                agent_command=f'"{sys.executable}" "{bridge}"',
+            )
+            self.assertIsNotNone(thread)
+            thread.join(5)
+            self.assertFalse(thread.is_alive())
+            completed = read_instruction(root, instruction["id"])
+            self.assertEqual(completed["state"], "completed")
+            self.assertEqual(completed["agentBridge"]["exitCode"], 0)
 
     def test_s48_cleanup_removes_only_stale_partial_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import os
 import subprocess
 import sys
 import time
@@ -59,6 +61,8 @@ def run_worker_once(
     report_to: str = "",
     from_name: str = "agentremote-worker",
     timeout: int = 600,
+    agent_command: str = "",
+    agent_command_shell: bool = False,
 ) -> dict[str, Any]:
     root = root.resolve()
     manifest = select_instruction(root, instruction_id=instruction_id, include_manual=include_manual)
@@ -74,12 +78,59 @@ def run_worker_once(
     print_plan(plan)
     if execute == "never":
         return {"state": "claimed", "instruction": manifest, "plan": plan}
-    approve_execution(execute, plan)
+    approve_execution(execute, plan, agent_command=agent_command)
     if plan["blockedCommands"]:
         return finish_without_execution(root, manifest, plan, "blocked", report_to, from_name)
     if plan.get("policyBlockedCommands"):
         return finish_without_execution(root, manifest, plan, "blocked", report_to, from_name)
     if not plan["commands"]:
+        if agent_command:
+            require_approval(
+                root,
+                "worker.agent_bridge",
+                risk="high",
+                origin_type="worker",
+                agent_id=from_name,
+                model_id=str(manifest.get("modelId", "")),
+                call_id=str(manifest.get("callId", "")),
+                handoff_id=str(manifest.get("handoffId", "")),
+                summary="Run local agent bridge for natural-language handoff",
+                details=agent_command,
+                timeout=300,
+                poll_interval=0.25,
+            )
+            append_event(
+                root,
+                "HANDOFF_AGENT_BRIDGE_STARTED",
+                f"Instruction: {manifest['id']}\nExecutor: {from_name}\nCommand: {sanitize_worker_text(agent_command)}",
+            )
+            bridge = run_agent_bridge(
+                root,
+                manifest,
+                plan,
+                agent_command,
+                timeout=timeout,
+                shell=agent_command_shell,
+            )
+            state = "completed" if int(bridge.get("exitCode", -1)) == 0 else "failed"
+            report_text = str(bridge.get("reportText", "") or render_agent_bridge_report(manifest, plan, state, bridge))
+            report_info = deliver_report(root, manifest, report_text, report_to=report_to, from_name=from_name)
+            updated = update_instruction_state(
+                root,
+                str(manifest["id"]),
+                state,
+                extra={
+                    "completedAt": time.time(),
+                    "agentBridge": bridge,
+                    "report": report_info,
+                },
+            )
+            append_event(
+                root,
+                "HANDOFF_CLOSED",
+                f"Instruction: {manifest['id']}\nState: {state}\nAgentBridge: {bridge.get('exitCode')}\nReport: {report_info.get('state', 'none')}",
+            )
+            return {"state": state, "instruction": updated, "plan": plan, "agentBridge": bridge, "report": report_info}
         return finish_without_execution(root, manifest, plan, "blocked", report_to, from_name)
     require_approval(
         root,
@@ -144,6 +195,8 @@ def run_worker_loop(
     timeout: int = 600,
     interval: float = 5.0,
     max_iterations: int | None = None,
+    agent_command: str = "",
+    agent_command_shell: bool = False,
 ) -> dict[str, Any]:
     root = root.resolve()
     iterations = 0
@@ -161,6 +214,8 @@ def run_worker_loop(
                     report_to=report_to,
                     from_name=from_name,
                     timeout=timeout,
+                    agent_command=agent_command,
+                    agent_command_shell=agent_command_shell,
                 )
                 processed += 1
                 results.append(result)
@@ -300,16 +355,158 @@ def print_plan(plan: dict[str, Any]) -> None:
         print(f"callback: {plan['callbackAlias']}")
 
 
-def approve_execution(execute: str, plan: dict[str, Any]) -> None:
+def approve_execution(execute: str, plan: dict[str, Any], *, agent_command: str = "") -> None:
     if execute == "yes":
         return
     if execute != "ask":
         raise AgentRemoteError(400, "bad_execute_mode", "execute must be never, ask, or yes")
     if not sys.stdin.isatty():
         raise AgentRemoteError(409, "execution_needs_approval", "Execution approval requires an interactive terminal")
-    answer = input("Run these agentremote-run commands? [y/N] ").strip().lower()
+    prompt = "Run this local agent bridge? [y/N] " if agent_command and not plan.get("commands") else "Run these agentremote-run commands? [y/N] "
+    answer = input(prompt).strip().lower()
     if answer not in ("y", "yes"):
         raise AgentRemoteError(409, "execution_cancelled", "Worker execution was cancelled")
+
+
+def run_agent_bridge(
+    root: Path,
+    manifest: dict[str, Any],
+    plan: dict[str, Any],
+    agent_command: str,
+    *,
+    timeout: int,
+    shell: bool = False,
+) -> dict[str, Any]:
+    bridge_root = root.resolve() / ".agentremote" / "agent-bridge"
+    bridge_root.mkdir(parents=True, exist_ok=True)
+    instruction_id = safe_bridge_name(str(manifest.get("id", "instruction")))
+    input_file = bridge_root / f"{instruction_id}.request.json"
+    output_file = bridge_root / f"{instruction_id}.report.md"
+    request = {
+        "version": 1,
+        "root": str(root.resolve()),
+        "instructionId": manifest.get("id", ""),
+        "handoffId": manifest.get("handoffId", ""),
+        "handoffFile": manifest.get("handoffFile", ""),
+        "from": manifest.get("from", ""),
+        "task": manifest.get("task", ""),
+        "expectedReport": manifest.get("expectedReport", ""),
+        "paths": manifest.get("paths", []),
+        "plan": {
+            "paths": plan.get("paths", []),
+            "commands": plan.get("commands", []),
+        },
+        "outputFile": str(output_file),
+    }
+    input_file.write_text(json.dumps(request, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    output_file.unlink(missing_ok=True)
+
+    env = os.environ.copy()
+    env.update(
+        {
+            "AGENTREMOTE_ROOT": str(root.resolve()),
+            "AGENTREMOTE_INSTRUCTION_ID": str(manifest.get("id", "")),
+            "AGENTREMOTE_HANDOFF_ID": str(manifest.get("handoffId", "")),
+            "AGENTREMOTE_HANDOFF_FILE": str(manifest.get("handoffFile", "")),
+            "AGENTREMOTE_BRIDGE_INPUT": str(input_file),
+            "AGENTREMOTE_BRIDGE_OUTPUT": str(output_file),
+            "AGENTREMOTE_EXPECTED_REPORT": str(manifest.get("expectedReport", "")),
+        }
+    )
+
+    started = time.time()
+    try:
+        if shell:
+            completed = subprocess.run(
+                agent_command,
+                cwd=root,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env=env,
+            )
+            command_display = agent_command
+        else:
+            from .worker_policy import split_command_line
+
+            argv = split_command_line(agent_command)
+            if not argv:
+                raise ValueError("Agent bridge command line is empty")
+            completed = subprocess.run(
+                argv,
+                cwd=root,
+                shell=False,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+                env=env,
+            )
+            command_display = " ".join(argv)
+        exit_code = completed.returncode
+        stdout = completed.stdout
+        stderr = completed.stderr
+    except subprocess.TimeoutExpired as exc:
+        exit_code = -1
+        stdout = timeout_output(exc.stdout)
+        stderr = timeout_output(exc.stderr) or f"Agent bridge timed out after {timeout}s"
+        command_display = agent_command
+    except (OSError, ValueError) as exc:
+        exit_code = -1
+        stdout = ""
+        stderr = str(exc)
+        command_display = agent_command
+
+    report_text = ""
+    if output_file.exists():
+        try:
+            report_text = output_file.read_text(encoding="utf-8")
+        except OSError as exc:
+            stderr = (stderr + "\n" if stderr else "") + f"Could not read bridge output file: {exc}"
+    if not report_text.strip() and stdout.strip():
+        report_text = stdout
+    report_text = sanitize_worker_text(report_text.strip())
+    return {
+        "command": sanitize_worker_text(command_display),
+        "exitCode": exit_code,
+        "stdout": truncate(sanitize_worker_text(stdout)),
+        "stderr": truncate(sanitize_worker_text(stderr)),
+        "duration": round(time.time() - started, 3),
+        "inputFile": str(input_file),
+        "outputFile": str(output_file),
+        "reportText": report_text,
+        "shell": shell,
+    }
+
+
+def render_agent_bridge_report(
+    manifest: dict[str, Any],
+    plan: dict[str, Any],
+    state: str,
+    bridge: dict[str, Any],
+) -> str:
+    lines = [
+        f"agent-remote-sync agent bridge finished instruction {manifest.get('id', '')}.",
+        f"State: {state}",
+        f"Task: {manifest.get('task', '')}",
+        f"Bridge command: `{sanitize_worker_text(bridge.get('command', ''))}`",
+        f"Exit code: {bridge.get('exitCode')}",
+    ]
+    if bridge.get("stderr"):
+        lines.append("")
+        lines.append("stderr:")
+        lines.append(indent(str(bridge.get("stderr", ""))))
+    if bridge.get("stdout"):
+        lines.append("")
+        lines.append("stdout:")
+        lines.append(indent(str(bridge.get("stdout", ""))))
+    lines.append("")
+    lines.append("Related paths:")
+    for item in plan.get("paths", []):
+        lines.append(f"- {item.get('path')} ({'exists' if item.get('exists') else item.get('error', 'missing')})")
+    return "\n".join(lines)
 
 
 def execute_commands(
@@ -556,3 +753,8 @@ def sanitize_worker_text(value: Any) -> str:
 
 def indent(text: str) -> str:
     return "\n".join("  " + line for line in text.splitlines())
+
+
+def safe_bridge_name(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in "-_." else "-" for ch in str(value or "instruction"))
+    return cleaned[:120] or "instruction"

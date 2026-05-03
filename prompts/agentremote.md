@@ -147,6 +147,25 @@ agentremote inbox --read <instruction-id>
 agentremote worker --once --execute ask
 ```
 
+For unattended receiver-side processing, the receiver must explicitly opt in to
+an embedded worker:
+
+```powershell
+agentremote daemon serve --root <project> --auto-worker --worker-execute yes
+```
+
+This only runs explicit `agentremote-run:` lines. For natural-language handoffs
+with no explicit command, the receiver must also configure a local agent bridge:
+
+```powershell
+agentremote daemon serve --root <project> --auto-worker --worker-execute yes --worker-agent-command "<trusted local agent bridge command>"
+```
+
+The bridge command receives `AGENTREMOTE_BRIDGE_INPUT` and must write a markdown
+report to `AGENTREMOTE_BRIDGE_OUTPUT` or print a report to stdout. Do not imply
+that `--auto-run` alone wakes a remote LLM; it only marks the instruction as
+eligible for a receiver-side worker.
+
 Avoid remote destinations under `.agentremote_*`; those are protocol-reserved.
 For human-readable handoff attachments, use a project path such as
 `/Project/AIMemory/incoming_handoffs`.

@@ -64,12 +64,16 @@ class SlaveState:
         quiet: bool = True,
         policy: str = "off",
         node_name: str = "",
+        auto_worker: bool = False,
+        agent_bridge: bool = False,
     ):
         self.root = root.resolve()
         self.model_id = model_id
         self.quiet = quiet
         self.policy = policy
         self.node_name = node_name or self._default_node_name()
+        self.auto_worker = auto_worker
+        self.agent_bridge = agent_bridge
         self.started_at = time.time()
         self.security = SecurityState(security_config)
         self.salt = make_salt()
@@ -91,6 +95,11 @@ class SlaveState:
         with self.lock:
             now = time.time()
             active = sum(1 for s in self.sessions.values() if float(s.get("expires", 0)) >= now)
+        capabilities = ["file-transfer", "handoff", "route-probe", "worker"]
+        if self.auto_worker:
+            capabilities.append("auto-worker")
+        if self.agent_bridge:
+            capabilities.append("agent-bridge")
         info = {
             "nodeName": self.node_name,
             "modelId": self.model_id,
@@ -99,7 +108,7 @@ class SlaveState:
             "startedAt": self.started_at,
             "storage": storage_info(self.root),
             "activeSessions": active,
-            "capabilities": ["file-transfer", "handoff", "route-probe", "worker"],
+            "capabilities": capabilities,
         }
         if not authenticated:
             info.pop("activeSessions", None)
@@ -684,6 +693,15 @@ def run_slave(
     verbose: bool = False,
     policy: str = "off",
     node_name: str = "",
+    auto_worker: bool = False,
+    worker_execute: str = "never",
+    worker_include_manual: bool = False,
+    worker_report_to: str = "",
+    worker_from_name: str = "agentremote-auto-worker",
+    worker_timeout: int = 600,
+    worker_interval: float = 5.0,
+    worker_agent_command: str = "",
+    worker_agent_command_shell: bool = False,
 ) -> None:
     if password is None:
         import getpass
@@ -705,6 +723,8 @@ def run_slave(
         quiet=not verbose,
         policy=policy,
         node_name=node_name,
+        auto_worker=auto_worker,
+        agent_bridge=bool(worker_agent_command),
         security_config=SecurityConfig(
             max_concurrent_requests=max_concurrent,
             authenticated_transfer_per_minute=authenticated_transfer_per_minute,
@@ -716,6 +736,18 @@ def run_slave(
         wrap_server_socket(server, tls_files.cert_file, tls_files.key_file)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    start_embedded_worker(
+        state,
+        enabled=auto_worker,
+        execute=worker_execute,
+        include_manual=worker_include_manual,
+        report_to=worker_report_to,
+        from_name=worker_from_name,
+        timeout=worker_timeout,
+        interval=worker_interval,
+        agent_command=worker_agent_command,
+        agent_command_shell=worker_agent_command_shell,
+    )
     scheme = "https" if tls_files else "http"
 
     print()
@@ -725,6 +757,9 @@ def run_slave(
     print(f"Root:   {root}")
     print(f"Port:   {port}")
     print(f"Model:  {model_id}")
+    print(f"Worker: {'auto' if auto_worker else 'off'}")
+    if auto_worker:
+        print(f"        execute={worker_execute} bridge={'on' if worker_agent_command else 'off'} interval={worker_interval}s")
     print("Pairing: started from this project root; handoffs are recorded in AIMemory")
     print(f"TLS:    {'enabled' if tls_files else 'off'}")
     if tls_files:
@@ -771,6 +806,57 @@ def run_slave(
         state.log("stopping slave")
         server.shutdown()
         server.server_close()
+
+
+def start_embedded_worker(
+    state: SlaveState,
+    *,
+    enabled: bool,
+    execute: str = "never",
+    include_manual: bool = False,
+    report_to: str = "",
+    from_name: str = "agentremote-auto-worker",
+    timeout: int = 600,
+    interval: float = 5.0,
+    max_iterations: int | None = None,
+    agent_command: str = "",
+    agent_command_shell: bool = False,
+) -> threading.Thread | None:
+    if not enabled:
+        return None
+
+    def runner() -> None:
+        try:
+            from .worker import run_worker_loop
+
+            state.log(
+                "auto-worker started "
+                f"execute={execute} bridge={'on' if agent_command else 'off'} interval={interval}s",
+                important=True,
+            )
+            result = run_worker_loop(
+                state.root,
+                execute=execute,
+                include_manual=include_manual,
+                report_to=report_to,
+                from_name=from_name,
+                timeout=timeout,
+                interval=interval,
+                max_iterations=max_iterations,
+                agent_command=agent_command,
+                agent_command_shell=agent_command_shell,
+            )
+            state.log(
+                "auto-worker stopped "
+                f"state={result.get('state')} processed={result.get('processed')} idle={result.get('idle')}",
+                important=True,
+            )
+        except Exception as exc:
+            state.log(f"auto-worker failed: {type(exc).__name__}: {exc}", important=True)
+
+    thread = threading.Thread(target=runner, daemon=True, name="agentremote-auto-worker")
+    thread.start()
+    return thread
 
 
 def input_available() -> bool:
