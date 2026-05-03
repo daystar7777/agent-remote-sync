@@ -21,14 +21,26 @@
 
     * { box-sizing: border-box; }
 
+    html {
+      height: 100%;
+    }
+
     body {
       margin: 0;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: 56px auto auto minmax(0, 1fr);
+      overflow: hidden;
       background: var(--bg);
       color: var(--text);
       font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
     }
 
     header {
+      grid-row: 1;
+      position: sticky;
+      top: 0;
+      z-index: 50;
       display: flex;
       align-items: center;
       justify-content: space-between;
@@ -37,6 +49,33 @@
       padding: 0 18px;
       border-bottom: 1px solid var(--line);
       background: #fff;
+    }
+
+    .app-tabs {
+      grid-row: 2;
+      display: flex;
+      align-items: end;
+      gap: 4px;
+      min-width: 0;
+      padding: 0 12px;
+      border-bottom: 1px solid var(--line);
+      background: #fdfefe;
+      z-index: 45;
+    }
+
+    .tab-button {
+      min-height: 32px;
+      border-bottom: 0;
+      background: #f8fafc;
+      color: var(--muted);
+      font-weight: 650;
+    }
+
+    .tab-button.active {
+      background: #fff;
+      color: var(--blue);
+      border-color: var(--line);
+      box-shadow: inset 0 2px 0 var(--blue);
     }
 
     .brand {
@@ -60,12 +99,17 @@
     }
 
     main {
+      grid-row: 4;
       display: grid;
       grid-template-columns: repeat(2, minmax(280px, 1fr));
       gap: 12px;
-      height: calc(100vh - 112px);
       padding: 12px;
       min-height: 0;
+      overflow: hidden;
+    }
+
+    .view[hidden] {
+      display: none !important;
     }
 
     .panel {
@@ -149,6 +193,7 @@
     .list {
       overflow: auto;
       min-height: 0;
+      user-select: none;
     }
 
     table {
@@ -184,14 +229,16 @@
     .modified { width: 150px; }
 
     footer {
+      grid-row: 3;
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto auto;
       gap: 12px;
       align-items: center;
-      height: 56px;
-      padding: 8px 14px;
-      border-top: 1px solid var(--line);
+      min-height: 50px;
+      padding: 8px 12px;
+      border-bottom: 1px solid var(--line);
       background: #fff;
+      z-index: 40;
     }
 
     .status {
@@ -228,7 +275,7 @@
       position: fixed;
       left: 14px;
       right: 14px;
-      bottom: 64px;
+      bottom: 14px;
       z-index: 20;
       display: grid;
       grid-template-rows: auto auto minmax(0, 1fr);
@@ -380,8 +427,12 @@
     }
 
     .dashboard-panel {
-      display: block;
-      margin: 10px 12px 0;
+      grid-row: 4;
+      display: grid;
+      grid-template-rows: auto minmax(0, 1fr);
+      margin: 12px;
+      min-height: 0;
+      overflow: hidden;
     }
 
     .dashboard-panel[hidden] {
@@ -390,7 +441,8 @@
 
     .dashboard-content {
       padding: 10px;
-      max-height: 340px;
+      max-height: none;
+      min-height: 0;
       overflow: auto;
     }
 
@@ -551,7 +603,6 @@
       main {
         grid-template-columns: 1fr;
         grid-template-rows: repeat(2, minmax(0, 1fr));
-        height: calc(100vh - 112px);
       }
 
       footer {
@@ -593,21 +644,25 @@
       <div class="meta" id="remote-meta"></div>
     </div>
     <div class="meta" id="local-meta"></div>
-    <button id="dashboard-toggle" style="font-size:12px;margin-left:8px;" onclick="toggleDashboard()">Dashboard</button>
-    <button id="inbox-toggle" style="font-size:12px;margin-left:6px;" onclick="toggleInbox()">Inbox</button>
   </header>
 
-  <section class="panel dashboard-panel" id="dashboard-panel" hidden>
+  <nav class="app-tabs" aria-label="Main views">
+    <button class="tab-button active" type="button" data-view="files">Files</button>
+    <button class="tab-button" id="dashboard-toggle" type="button" data-view="dashboard">Dashboard</button>
+    <button class="tab-button" id="inbox-toggle" type="button" data-view="inbox">Inbox</button>
+  </nav>
+
+  <section class="panel dashboard-panel view" id="dashboard-panel" hidden>
     <div class="panel-head"><strong>Swarm Dashboard</strong> <button onclick="loadDashboard()" style="font-size:11px;margin-left:10px;">Refresh</button></div>
     <div class="dashboard-content" id="dashboard-content">Loading...</div>
   </section>
 
-  <section class="panel dashboard-panel" id="inbox-panel" hidden>
+  <section class="panel dashboard-panel view" id="inbox-panel" hidden>
     <div class="panel-head"><strong>Inbox &mdash; Received Handoffs / Reports</strong> <button onclick="loadInbox()" style="font-size:11px;margin-left:10px;">Refresh</button></div>
     <div class="dashboard-content" id="inbox-content">Loading...</div>
   </section>
 
-  <main>
+  <main class="view" id="files-view">
     <section class="panel" id="remote-panel">
       <div class="panel-head">
         <div class="title">
@@ -721,6 +776,7 @@
       remoteParent: "/",
       localParent: "/",
       selected: { remote: [], local: [] },
+      lastSelected: { remote: null, local: null },
       currentJobId: "",
       activeTransfer: null
     };
@@ -765,6 +821,26 @@
       cancelTransferEl.hidden = !state.currentJobId;
     }
 
+    function setTransferButtonsBusy(busy) {
+      document.getElementById("upload").disabled = busy;
+      document.getElementById("download").disabled = busy;
+    }
+
+    function showTransferPreparing(verb, count) {
+      transferMonitorEl.hidden = false;
+      transferTitleEl.textContent = `${verb} transfer`;
+      transferSummaryEl.textContent = "Preparing transfer plan...";
+      transferCurrentEl.textContent =
+        `Checking ${count} selected item(s), folder contents, conflicts, and destination free space.`;
+      transferQueueEl.innerHTML = `<div class="queue-row current">
+        <span class="queue-status">waiting</span>
+        <span class="queue-path">Preparing transfer plan...</span>
+        <span class="queue-size"></span>
+      </div>`;
+      progressEl.max = 1;
+      progressEl.value = 0;
+    }
+
     function setActiveTransfer(plan, verb) {
       let offset = 0;
       state.activeTransfer = {
@@ -802,11 +878,11 @@
       const speed = Number(job?.speedBytesPerSecond || 0);
       const eta = Number(job?.etaSeconds || 0);
       const liveStats = speed > 0
-        ? ` · ${formatBytes(speed)}/s${eta > 0 ? ` · ETA ${formatDuration(eta)}` : ""}`
+        ? ` | ${formatBytes(speed)}/s${eta > 0 ? ` | ETA ${formatDuration(eta)}` : ""}`
         : "";
       transferTitleEl.textContent = `${transfer.verb} transfer`;
       transferSummaryEl.textContent =
-        `${stateText}: ${formatBytes(doneBytes)} / ${formatBytes(totalBytes)}${liveStats} · ${transfer.totalFiles} file(s), ${transfer.totalDirs} folder(s)`;
+        `${stateText}: ${formatBytes(doneBytes)} / ${formatBytes(totalBytes)}${liveStats} | ${transfer.totalFiles} file(s), ${transfer.totalDirs} folder(s)`;
       if (job?.state === "done") {
         transferCurrentEl.textContent = "Completed";
       } else if (job?.state === "cancelled") {
@@ -875,6 +951,7 @@
       state[`${side}Path`] = data.path;
       state[`${side}Parent`] = data.parent;
       state.selected[side] = [];
+      state.lastSelected[side] = null;
       document.getElementById(`${side}-path`).textContent = data.path;
       renderList(side, data.entries);
     }
@@ -913,14 +990,36 @@
     }
 
     function selectRow(side, row, event) {
+      if (event.shiftKey || event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+      }
       const item = { path: row.dataset.path, type: row.dataset.type };
       const current = state.selected[side];
-      if (event.ctrlKey || event.metaKey) {
+      const rows = Array.from(document.querySelectorAll(`#${side}-list tr[data-path]`));
+      const clickedIndex = rows.indexOf(row);
+      const anchorPath = state.lastSelected[side];
+      const anchorIndex = rows.findIndex((entry) => entry.dataset.path === anchorPath);
+      if (event.shiftKey && anchorIndex >= 0 && clickedIndex >= 0) {
+        const start = Math.min(anchorIndex, clickedIndex);
+        const end = Math.max(anchorIndex, clickedIndex);
+        const range = rows.slice(start, end + 1).map((entry) => ({
+          path: entry.dataset.path,
+          type: entry.dataset.type
+        }));
+        if (event.ctrlKey || event.metaKey) {
+          const merged = new Map(current.map((entry) => [entry.path, entry]));
+          for (const entry of range) merged.set(entry.path, entry);
+          state.selected[side] = Array.from(merged.values());
+        } else {
+          state.selected[side] = range;
+        }
+      } else if (event.ctrlKey || event.metaKey) {
         const exists = current.some((entry) => entry.path === item.path);
         state.selected[side] = exists ? current.filter((entry) => entry.path !== item.path) : [...current, item];
       } else {
         state.selected[side] = [item];
       }
+      state.lastSelected[side] = item.path;
       syncSelectionStyles(side);
     }
 
@@ -928,7 +1027,12 @@
       const selectedPaths = new Set(state.selected[side].map((entry) => entry.path));
       document.querySelectorAll(`#${side}-list tr[data-path]`).forEach((row) => {
         row.classList.toggle("selected", selectedPaths.has(row.dataset.path));
+        row.setAttribute("aria-selected", selectedPaths.has(row.dataset.path) ? "true" : "false");
       });
+      const count = selectedPaths.size;
+      if (count) {
+        setStatus(`${side === "local" ? "Local" : "Remote"}: ${count} selected`);
+      }
     }
 
     function selectedItems(side) {
@@ -944,7 +1048,7 @@
       const items = selectedItems(side);
       if (!items.length) return state[`${side}Path`];
       if (items.length === 1 && items[0].type === "dir") return items[0].path;
-      throw new Error(`Select one ${side} folder as the destination, or clear the ${side} selection.`);
+      return state[`${side}Path`];
     }
 
     function baseName(path) {
@@ -1058,8 +1162,16 @@
         alert("Select one or more local items first.");
         return;
       }
+      setStatus(`preparing upload plan for ${selected.length} item(s)...`);
+      showTransferPreparing("Upload", selected.length);
+      setTransferButtonsBusy(true);
       const body = { paths: selected.map((item) => item.path), remoteDir: selectedDestinationDir("remote") };
-      const plan = await api("/api/plan/upload", { method: "POST", body: JSON.stringify(body) });
+      let plan;
+      try {
+        plan = await api("/api/plan/upload", { method: "POST", body: JSON.stringify(body) });
+      } finally {
+        setTransferButtonsBusy(false);
+      }
       const overwrite = await showPlanDialog(plan, "Upload");
       if (overwrite === null) return;
       setActiveTransfer(plan, "Upload");
@@ -1077,8 +1189,16 @@
         alert("Select one or more remote items first.");
         return;
       }
+      setStatus(`preparing download plan for ${selected.length} item(s)...`);
+      showTransferPreparing("Download", selected.length);
+      setTransferButtonsBusy(true);
       const body = { paths: selected.map((item) => item.path), localDir: selectedDestinationDir("local") };
-      const plan = await api("/api/plan/download", { method: "POST", body: JSON.stringify(body) });
+      let plan;
+      try {
+        plan = await api("/api/plan/download", { method: "POST", body: JSON.stringify(body) });
+      } finally {
+        setTransferButtonsBusy(false);
+      }
       const overwrite = await showPlanDialog(plan, "Download");
       if (overwrite === null) return;
       setActiveTransfer(plan, "Download");
@@ -1194,6 +1314,9 @@
     transferHideEl.addEventListener("click", () => {
       transferMonitorEl.hidden = true;
     });
+    document.querySelectorAll(".tab-button").forEach((button) => {
+      button.addEventListener("click", () => showView(button.dataset.view || "files"));
+    });
 
     api("/api/bootstrap").then((data) => {
       document.getElementById("remote-meta").textContent = data.remoteBase;
@@ -1202,9 +1325,23 @@
     }).catch(showError);
 
     function toggleDashboard() {
-      const panel = document.getElementById("dashboard-panel");
-      panel.hidden = !panel.hidden;
-      if (!panel.hidden) loadDashboard();
+      showView("dashboard");
+    }
+
+    function showView(view) {
+      const views = {
+        files: document.getElementById("files-view"),
+        dashboard: document.getElementById("dashboard-panel"),
+        inbox: document.getElementById("inbox-panel")
+      };
+      for (const [name, element] of Object.entries(views)) {
+        element.hidden = name !== view;
+      }
+      document.querySelectorAll(".tab-button").forEach((button) => {
+        button.classList.toggle("active", button.dataset.view === view);
+      });
+      if (view === "dashboard") loadDashboard();
+      if (view === "inbox") loadInbox();
     }
 
     function loadDashboard() {
@@ -1417,9 +1554,7 @@
     }
 
     function toggleInbox() {
-      const panel = document.getElementById("inbox-panel");
-      panel.hidden = !panel.hidden;
-      if (!panel.hidden) loadInbox();
+      showView("inbox");
     }
 
     function loadInbox() {
