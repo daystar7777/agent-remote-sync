@@ -1,15 +1,20 @@
-# agentFTP Usage Scenarios
+# agent-remote-sync Usage Scenarios
 
-agentFTP is the CLI/product name. Its role is agent-work-mem multi-host handoff
+agent-remote-sync is the CLI/product name. Its role is agent-work-mem multi-host handoff
 transport: it moves files, task intent, and reports between hosts while writing
 AICP-compatible records on both sides.
+
+For release-candidate manual validation, use
+[`docs/v0.1-validation-scenarios.md`](v0.1-validation-scenarios.md). That plan
+groups the major user flows into automated, browser/manual, and fault-injection
+checks.
 
 ## Scenario Matrix
 
 | ID | Scenario | User phrasing | Expected result | Test coverage |
 |----|----------|---------------|-----------------|---------------|
-| S01 | Install memory | "Install agentFTP here." | AIMemory exists before agentFTP operations continue. | `test_s01_install_work_mem_is_idempotent` |
-| S02 | Start slave | "Run agentFTP slave mode here." | Current folder is strict remote root; reserved folders are hidden. | `test_s02_slave_lists_root_and_hides_reserved_state` |
+| S01 | Install memory | "Install agent-remote-sync here." | AIMemory exists before agent-remote-sync operations continue. | `test_s01_install_work_mem_is_idempotent` |
+| S02 | Start slave | "Run agent-remote-sync slave mode here." | Current folder is strict remote root; reserved folders are hidden. | `test_s02_slave_lists_root_and_hides_reserved_state` |
 | S03 | Connect alias | "Connect to this host as lab." | Saved alias is `::lab`; password is replaced by session token. | `test_s03_connect_alias_token_reuse_and_disconnect` |
 | S04 | Master browser transfer | "Open master mode to lab." | Browser API can upload and download through the master job queue. | `test_s04_master_browser_api_upload_download` |
 | S05 | Simple headless push | "Send KKK folder to XXX." | Folder is uploaded resumably; host history records the push. | `test_s05_headless_push_folder_records_host_history` |
@@ -23,24 +28,24 @@ AICP-compatible records on both sides.
 | S13 | Missing memory | "Run without agent-work-mem." | Non-interactive operations fail instead of silently proceeding. | `test_s13_missing_work_mem_blocks_runtime_operations` |
 | S14 | Slave model execution | "Run this on the remote agent." | Handoff metadata records the slave-starting model as executor. | `test_s14_slave_model_is_recorded_for_remote_execution` |
 | S15 | Security throttles | "What if someone floods it?" | Oversized requests and repeated bad logins are rejected. | `test_s15_security_limits_reject_oversized_json_upload_and_login_flood` |
-| S16 | Firewall UX | "Open the firewall for agentFTP." | Firewall changes require explicit ask/yes and use OS-specific commands. | `test_s16_firewall_skip_and_bad_port_are_safe` |
-| S17 | Bootstrap prerequisites | "Install agentFTP here." | Bootstrap reports Python/pip/Git/pipx/AIMemory and can set up AIMemory. | `test_s17_bootstrap_installs_work_mem_and_reports_checks` |
+| S16 | Firewall UX | "Open the firewall for agent-remote-sync." | Firewall changes require explicit ask/yes and use OS-specific commands. | `test_s16_firewall_skip_and_bad_port_are_safe` |
+| S17 | Bootstrap prerequisites | "Install agent-remote-sync here." | Bootstrap reports Python/pip/Git/pipx/AIMemory and can set up AIMemory. | `test_s17_bootstrap_installs_work_mem_and_reports_checks` |
 | S18 | Cross-OS filenames | "Send these Korean filenames between Windows and Mac." | NFC/NFD variants resolve correctly and new files are written in NFC. | `test_s18_unicode_filename_normalization_across_os_styles` |
-| S19 | Handoff command | "Send LLL and tell XXX to do ZZZ." | `agentftp handoff` pushes the file and sends an AICP handoff referencing the remote path. | `test_s19_handoff_command_pushes_file_and_sends_instruction` |
+| S19 | Handoff command | "Send LLL and tell XXX to do ZZZ." | `agentremote handoff` pushes the file and sends an AICP handoff referencing the remote path. | `test_s19_handoff_command_pushes_file_and_sends_instruction` |
 | S20 | HTTPS self-signed | "Run this securely over HTTPS." | A self-signed slave works when the master pins the certificate fingerprint. | `test_s20_https_self_signed_fingerprint_allows_transfer` |
-| S21 | Inbox claim | "Take this handoff." | `agentftp inbox --claim` marks a received instruction as claimed and records AIMemory. | `test_s21_inbox_claim_marks_instruction_and_records_memory` |
-| S22 | Worker dry-run | "Auto-run this, but inspect first." | `agentftp worker --once` claims autoRun work and records a plan without executing. | `test_s22_worker_dry_run_claims_autorun_without_executing` |
-| S23 | Worker execute | "Run this explicit command." | Worker executes `agentftp-run:` commands and writes a local STATUS_REPORT. | `test_s23_worker_executes_explicit_command_and_writes_local_report` |
+| S21 | Inbox claim | "Take this handoff." | `agentremote inbox --claim` marks a received instruction as claimed and records AIMemory. | `test_s21_inbox_claim_marks_instruction_and_records_memory` |
+| S22 | Worker dry-run | "Auto-run this, but inspect first." | `agentremote worker --once` claims autoRun work and records a plan without executing. | `test_s22_worker_dry_run_claims_autorun_without_executing` |
+| S23 | Worker execute | "Run this explicit command." | Worker executes `agentremote-run:` commands and writes a local STATUS_REPORT. | `test_s23_worker_executes_explicit_command_and_writes_local_report` |
 | S24 | Worker callback report | "Run it and report back." | Worker sends STATUS_REPORT back through a receiver-side saved callback alias. | `test_s24_worker_sends_report_to_callback_alias` |
 | S25 | Transfer log rotation | "Syncs will create a lot of logs." | File-level JSONL logs rotate and old logs are pruned. | `test_s25_transfer_logger_rotates_and_prunes` |
-| S26 | Transfer session summary | "Show what happened without bloating AIMemory." | Push writes `.agentftp` session/log files and AIMemory stores only summary pointers. | `test_s26_headless_push_writes_session_log_and_memory_summary` |
+| S26 | Transfer session summary | "Show what happened without bloating AIMemory." | Push writes `.agentremote` session/log files and AIMemory stores only summary pointers. | `test_s26_headless_push_writes_session_log_and_memory_summary` |
 | S27 | Storage failure report | "What if disk or permissions fail?" | Remote storage failures become structured errors and failed transfer sessions. | `test_s27_remote_storage_errors_are_structured_and_logged` |
 | S28 | Sync plan | "Show me what would sync." | Plan reports copied files, conflicts, skipped files, and delete candidates. | `test_s28_sync_plan_detects_copy_conflict_and_delete_candidates` |
 | S29 | Sync push | "Sync this project to XXX." | Missing files upload resumably; session, plan, log, and host history are recorded. | `test_s29_sync_push_uploads_missing_files_and_records_session` |
 | S30 | Sync conflict policy | "Sync over an existing changed file." | Changed targets abort unless overwrite is explicit. | `test_s30_sync_push_conflict_requires_overwrite` |
 | S31 | Sync pull | "Sync result folder back from XXX." | Missing remote files download into the local folder and record host history. | `test_s31_sync_pull_downloads_missing_files_and_records_session` |
 | S32 | Missing remote sync source | "Pull a folder that does not exist." | Pull reports `not_found` instead of treating it as an empty sync. | `test_s32_sync_pull_missing_remote_reports_not_found` |
-| S33 | Sync CLI plan | "agentFTP sync plan ..." | CLI writes a plan file under `.agentftp/plans` and prints the JSON plan. | `test_s33_sync_plan_cli_writes_plan_file` |
+| S33 | Sync CLI plan | "agent-remote-sync sync plan ..." | CLI writes a plan file under `.agentremote/plans` and prints the JSON plan. | `test_s33_sync_plan_cli_writes_plan_file` |
 | S34 | GUI disk space | "Show whether both disks have room." | Master UI APIs report local and remote total/free disk space for display. | `test_s34_gui_storage_api_reports_local_and_remote_free_space` |
 | S35 | Headless upload space preflight | "Upload only if the receiver has room." | Headless push fails with `insufficient_storage` before writing remote files. | `test_s35_headless_push_preflight_blocks_insufficient_remote_space` |
 | S36 | GUI upload space preflight | "Upload from browser only if remote has room." | Master upload job reports an error before transferring. | `test_s36_master_upload_job_preflight_reports_remote_space_error` |
@@ -58,8 +63,8 @@ AICP-compatible records on both sides.
 ### Simple Transfer
 
 ```powershell
-agentftp connect lab 100.64.1.20
-agentftp push lab ./KKK /incoming
+agentremote connect lab 100.64.1.20
+agentremote push lab ./KKK /incoming
 ```
 
 The alias is shown and stored as `::lab`. Users may say `lab`; summaries should
@@ -68,9 +73,9 @@ say `::lab`.
 ### HTTPS Connection
 
 ```powershell
-agentftp slave --tls self-signed
-agentftp connect lab https://100.64.1.20:7171 --tls-fingerprint <sha256-fingerprint>
-agentftp handoff lab ./LLL "Use the uploaded file and report back."
+agentremote slave --tls self-signed
+agentremote connect lab https://100.64.1.20:7171 --tls-fingerprint <sha256-fingerprint>
+agentremote handoff lab ./LLL "Use the uploaded file and report back."
 ```
 
 The saved `::lab` entry stores the session token and TLS fingerprint.
@@ -78,36 +83,36 @@ The saved `::lab` entry stores the session token and TLS fingerprint.
 ### Instruction Only
 
 ```powershell
-agentftp tell lab "Run the parser tests and report failures."
+agentremote tell lab "Run the parser tests and report failures."
 ```
 
 This writes:
 
 - local `AIMemory/handoff_*.md` with direction `local`,
 - remote `AIMemory/handoff_*.md` with direction `external`,
-- remote `.agentftp_inbox/<id>/manifest.json`.
+- remote `.agentremote_inbox/<id>/manifest.json`.
 
 ### File Plus Instruction
 
 ```powershell
-agentftp handoff lab ./LLL "Use the uploaded file to do ZZZ and report back."
+agentremote handoff lab ./LLL "Use the uploaded file to do ZZZ and report back."
 ```
 
 ### Full Round Trip
 
 1. Master pushes files if needed.
 2. Master sends an AICP handoff via `handoff` or `tell`.
-3. Slave agent reads `agentftp inbox` or runs `agentftp worker --once`.
-4. Slave performs the task manually or executes explicit `agentftp-run:` lines.
-5. Slave sends `agentftp report master <handoff-id> "<result>"`, or worker sends it through `--callback-alias`.
-6. Master sees the returned report through `agentftp inbox` and AIMemory.
+3. Slave agent reads `agentremote inbox` or runs `agentremote worker --once`.
+4. Slave performs the task manually or executes explicit `agentremote-run:` lines.
+5. Slave sends `agentremote report master <handoff-id> "<result>"`, or worker sends it through `--callback-alias`.
+6. Master sees the returned report through `agentremote inbox` and AIMemory.
 
 ### Transfer State
 
 ```text
-.agentftp/logs/transfer-YYYYMMDD.jsonl
-.agentftp/sessions/<session-id>.json
-.agentftp/plans/<sync-plan-id>.json
+.agentremote/logs/transfer-YYYYMMDD.jsonl
+.agentremote/sessions/<session-id>.json
+.agentremote/plans/<sync-plan-id>.json
 ```
 
 AIMemory records only session summaries and pointers to these files. Detailed
@@ -115,7 +120,7 @@ file-level events are kept out of work logs and rotate automatically.
 
 ### Storage Preflight
 
-Before push/upload, agentFTP compares the remaining upload bytes against the
+Before push/upload, agent-remote-sync compares the remaining upload bytes against the
 remote free space. Before pull/download, it compares the remaining download
 bytes against local free space. Existing partial files reduce the remaining byte
 estimate. If the destination is already too small, the operation fails with
@@ -146,8 +151,8 @@ future resume.
 ### Scoped Connections
 
 ```powershell
-agentftp connect reviewer 100.64.1.20 --scopes read,handoff
-agentftp tell reviewer "Please inspect /project and report back." --path /project
+agentremote connect reviewer 100.64.1.20 --scopes read,handoff
+agentremote tell reviewer "Please inspect /project and report back." --path /project
 ```
 
 Scoped tokens limit the receiver API surface even after successful password
@@ -157,21 +162,21 @@ upload, rename, move, or delete.
 ### Worker Daemon
 
 ```powershell
-agentftp worker --execute ask
-agentftp worker --execute yes --max-iterations 10
+agentremote worker --execute ask
+agentremote worker --execute yes --max-iterations 10
 ```
 
 Without `--once`, the worker polls for received `autoRun` handoffs. It still
-executes only explicit `agentftp-run:` command lines, and `--execute ask`
+executes only explicit `agentremote-run:` command lines, and `--execute ask`
 requires an interactive terminal before running them.
 
 ### Conservative Sync
 
 ```powershell
-agentftp sync plan lab ./project /project
-agentftp sync push lab ./project /project --compare-hash
-agentftp sync pull lab /project ./project
-agentftp sync push lab ./project /project --delete
+agentremote sync plan lab ./project /project
+agentremote sync push lab ./project /project --compare-hash
+agentremote sync pull lab /project ./project
+agentremote sync push lab ./project /project --delete
 ```
 
 Sync copies missing files and treats changed target files as conflicts unless
@@ -184,16 +189,16 @@ mtime conflicts across Windows, macOS, and Linux.
 ### Cleanup
 
 ```powershell
-agentftp cleanup --older-than-hours 24
+agentremote cleanup --older-than-hours 24
 ```
 
-Cleanup removes stale `.agentftp_partial` files after interrupted or cancelled
+Cleanup removes stale `.agentremote_partial` files after interrupted or cancelled
 transfers. It does not delete completed sessions, transfer logs, AIMemory, or
 ordinary project files.
 
 ## Current Limits
 
-- Worker auto-execution is limited to explicit `agentftp-run:` command lines.
+- Worker auto-execution is limited to explicit `agentremote-run:` command lines.
 - Broader natural-language task execution still requires a local agent to inspect
   the plan and act.
 - HTTPS is implemented for self-signed or manual certificates, but public CA

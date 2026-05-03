@@ -1,0 +1,100 @@
+name: agent-remote-sync-fullscale
+
+services:
+  node-a:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command:
+      - python
+      - tools/docker_node_entry.py
+      - --root
+      - /lab/node-a/share
+      - --config
+      - /lab/node-a/config
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7171"
+      - --password
+      - ${AGENTREMOTE_DOCKER_PASSWORD:-lab-secret}
+      - --node-name
+      - node-a
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 7171), 2); s.close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - node-a-data:/lab/node-a
+    networks:
+      - agentnet
+
+  node-b:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    command:
+      - python
+      - tools/docker_node_entry.py
+      - --root
+      - /lab/node-b/share
+      - --config
+      - /lab/node-b/config
+      - --host
+      - 0.0.0.0
+      - --port
+      - "7171"
+      - --password
+      - ${AGENTREMOTE_DOCKER_PASSWORD:-lab-secret}
+      - --node-name
+      - node-b
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; s=socket.create_connection(('127.0.0.1', 7171), 2); s.close()"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    volumes:
+      - node-b-data:/lab/node-b
+    networks:
+      - agentnet
+
+  controller:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    depends_on:
+      node-a:
+        condition: service_healthy
+      node-b:
+        condition: service_healthy
+    command:
+      - python
+      - tools/docker_fullscale_runner.py
+      - --nodes
+      - node-a,node-b
+      - --password
+      - ${AGENTREMOTE_DOCKER_PASSWORD:-lab-secret}
+      - --work-root
+      - /lab/controller/work
+      - --config
+      - /lab/controller/config
+      - --results
+      - /lab/controller/results
+      - --many-count
+      - ${AGENTREMOTE_DOCKER_MANY_COUNT:-500}
+      - --large-size-mib
+      - ${AGENTREMOTE_DOCKER_LARGE_SIZE_MIB:-16}
+    volumes:
+      - controller-data:/lab/controller
+    networks:
+      - agentnet
+
+networks:
+  agentnet:
+    driver: bridge
+
+volumes:
+  controller-data:
+  node-a-data:
+  node-b-data:

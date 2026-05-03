@@ -1,6 +1,6 @@
-# agentFTP Protocol
+# agent-remote-sync Protocol
 
-agentFTP uses a small JSON-over-HTTP API. All paths are root-relative POSIX-like
+agent-remote-sync uses a small JSON-over-HTTP API. All paths are root-relative POSIX-like
 paths such as `/`, `/src`, or `/src/main.py`, regardless of host OS.
 
 ## Authentication
@@ -64,7 +64,7 @@ partial file and resumes from the current partial size after interruption.
 3. Repeat chunks sequentially.
 4. `POST /api/upload/finish`
 
-The receiver stores data under `.agentftp_partial` until completion, then moves
+The receiver stores data under `.agentremote_partial` until completion, then moves
 the file into place atomically where possible.
 
 If a chunk was written but the response was lost, a repeated chunk may receive

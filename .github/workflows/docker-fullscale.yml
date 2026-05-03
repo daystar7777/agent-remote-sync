@@ -1,0 +1,43 @@
+name: Docker Full-Scale Lab
+
+on:
+  workflow_dispatch:
+    inputs:
+      many_count:
+        description: Number of files for the many-file sync rehearsal
+        required: true
+        default: "500"
+      large_size_mib:
+        description: Large-file rehearsal size in MiB
+        required: true
+        default: "16"
+
+jobs:
+  docker-fullscale:
+    name: Docker full-scale lab
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run Docker full-scale lab
+        run: |
+          python tools/run_docker_fullscale.py \
+            --many-count "${{ inputs.many_count }}" \
+            --large-size-mib "${{ inputs.large_size_mib }}" \
+            --down
+
+      - name: Upload Docker full-scale results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-fullscale-results
+          path: build/docker-fullscale-results
+          if-no-files-found: warn

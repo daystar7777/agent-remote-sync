@@ -1,13 +1,13 @@
 # Transfer State, Logging, and Failure Policy
 
-agentFTP keeps high-volume transfer detail out of AIMemory.
+agent-remote-sync keeps high-volume transfer detail out of AIMemory.
 
 ## State Layout
 
 Runtime transfer state is project-local:
 
 ```text
-.agentftp/
+.agentremote/
   logs/
     transfer-YYYYMMDD.jsonl
   sessions/
@@ -15,7 +15,7 @@ Runtime transfer state is project-local:
   plans/
 ```
 
-`.agentftp` is reserved, hidden from normal remote listings, and ignored by Git.
+`.agentremote` is reserved, hidden from normal remote listings, and ignored by Git.
 
 ## AIMemory Boundary
 
@@ -27,14 +27,14 @@ AIMemory records only human-useful summaries:
 - session id,
 - detail log path.
 
-File-level events stay in `.agentftp/logs`. Chunk-level events are not logged by
+File-level events stay in `.agentremote/logs`. Chunk-level events are not logged by
 default because they can be very high volume and slow large transfers.
 
 ## Log Rotation
 
 Transfer logs are JSONL and rotate by size:
 
-- default active log: `.agentftp/logs/transfer-YYYYMMDD.jsonl`,
+- default active log: `.agentremote/logs/transfer-YYYYMMDD.jsonl`,
 - default max file size: `10 MB`,
 - default retained files: `5`.
 
@@ -65,8 +65,8 @@ transfer can continue from the saved offset.
 
 ## Sync Plans
 
-`agentftp sync plan`, `sync push`, and `sync pull` write JSON plans under
-`.agentftp/plans/`. A plan records:
+`agentremote sync plan`, `sync push`, and `sync pull` write JSON plans under
+`.agentremote/plans/`. A plan records:
 
 - source and target roots,
 - files to copy,
@@ -79,7 +79,7 @@ keeps only the plan path, session id, and aggregate counts.
 
 ## Failure Policy
 
-agentFTP distinguishes failures that the receiver can decide locally from
+agent-remote-sync distinguishes failures that the receiver can decide locally from
 failures that require the master/user to decide.
 
 Before writes start, transfer plans are checked against destination free space:
@@ -127,12 +127,12 @@ These become structured errors such as:
 
 In worker flows, blocked failures are reported as `STATUS_REPORT` handoffs
 rather than guessed around. The slave remains quiet by default: it returns
-structured errors to the caller and stores logs, while `agentftp slave --verbose`
+structured errors to the caller and stores logs, while `agentremote slave --verbose`
 enables console request logs for debugging.
 
 ## Permission Model
 
-agentFTP enforces permissions at both token and command levels:
+agent-remote-sync enforces permissions at both token and command levels:
 
 - token scopes split `read`, `write`, `delete`, and `handoff`,
 - push/sync push can write but not delete unless `--delete` exists and the token
@@ -140,11 +140,11 @@ agentFTP enforces permissions at both token and command levels:
 - pull/sync pull can read but not overwrite without confirmation or
   `--overwrite`,
 - `sync --delete` applies file delete candidates only after explicit opt-in,
-- worker executes only explicit `agentftp-run:` lines,
+- worker executes only explicit `agentremote-run:` lines,
 - destructive commands require a future explicit policy layer.
 
 There is intentionally no `execute` token scope yet. Worker execution remains a
-local receiver-side decision controlled by `agentftp worker --execute ...`.
+local receiver-side decision controlled by `agentremote worker --execute ...`.
 
 ## Cleanup
 
@@ -152,8 +152,8 @@ Stale partial files can be removed without touching AIMemory or completed
 sessions:
 
 ```powershell
-agentftp cleanup --older-than-hours 24
+agentremote cleanup --older-than-hours 24
 ```
 
-The command only scans `.agentftp_partial/` under the selected root and reports
+The command only scans `.agentremote_partial/` under the selected root and reports
 removed file count and freed bytes.

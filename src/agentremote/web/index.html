@@ -1,0 +1,1477 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>agent-remote-sync</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f9;
+      --panel: #ffffff;
+      --line: #d9dee7;
+      --text: #18202f;
+      --muted: #667085;
+      --blue: #2563eb;
+      --green: #0f766e;
+      --red: #b42318;
+      --amber: #a15c07;
+      --select: #e8f0ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.45 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      height: 56px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .brand {
+      display: flex;
+      align-items: baseline;
+      gap: 10px;
+      min-width: 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .meta {
+      color: var(--muted);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    main {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(280px, 1fr));
+      gap: 12px;
+      height: calc(100vh - 112px);
+      padding: 12px;
+      min-height: 0;
+    }
+
+    .panel {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      min-width: 0;
+      border: 1px solid var(--line);
+      background: var(--panel);
+    }
+
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      min-height: 46px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .title {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .title strong {
+      font-size: 13px;
+    }
+
+    .path {
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+
+    .storage {
+      color: var(--muted);
+      font-size: 12px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcfe;
+    }
+
+    button {
+      min-height: 32px;
+      border: 1px solid #c8ced9;
+      background: #fff;
+      color: var(--text);
+      padding: 5px 9px;
+      font: inherit;
+      cursor: pointer;
+    }
+
+    button:hover { border-color: #98a2b3; }
+    button.primary { border-color: var(--blue); color: var(--blue); }
+    button.danger { border-color: #f3b7b0; color: var(--red); }
+
+    input[type="text"] {
+      min-height: 34px;
+      width: 100%;
+      border: 1px solid #c8ced9;
+      padding: 6px 8px;
+      color: var(--text);
+      font: inherit;
+    }
+
+    .list {
+      overflow: auto;
+      min-height: 0;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th, td {
+      height: 34px;
+      padding: 0 10px;
+      border-bottom: 1px solid #eef1f5;
+      text-align: left;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      background: #fbfcfe;
+    }
+
+    tr { cursor: default; }
+    tr.selected { background: var(--select); }
+    tr:hover td { background: #f8fafc; }
+    tr.selected:hover td { background: var(--select); }
+
+    .kind { width: 70px; }
+    .size { width: 100px; text-align: right; }
+    .modified { width: 150px; }
+
+    footer {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto auto;
+      gap: 12px;
+      align-items: center;
+      height: 56px;
+      padding: 8px 14px;
+      border-top: 1px solid var(--line);
+      background: #fff;
+    }
+
+    .status {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+    }
+
+    progress {
+      width: 220px;
+      height: 12px;
+      accent-color: var(--green);
+    }
+
+    .footer-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .transfer-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .transfer-actions button {
+      min-width: 112px;
+      font-weight: 650;
+    }
+
+    .transfer-monitor {
+      position: fixed;
+      left: 14px;
+      right: 14px;
+      bottom: 64px;
+      z-index: 20;
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      max-height: min(320px, 38vh);
+      border: 1px solid var(--line);
+      background: #fff;
+      box-shadow: 0 8px 24px rgb(15 23 42 / 0.16);
+    }
+
+    .transfer-monitor[hidden] {
+      display: none;
+    }
+
+    .transfer-monitor-head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .transfer-monitor-title {
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .transfer-monitor-title strong,
+    .transfer-monitor-title span,
+    .transfer-current {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .transfer-monitor-title span,
+    .transfer-current {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .transfer-current {
+      padding: 8px 12px;
+      border-bottom: 1px solid #eef1f5;
+    }
+
+    .transfer-queue {
+      overflow: auto;
+      min-height: 0;
+    }
+
+    .queue-row {
+      display: grid;
+      grid-template-columns: 84px minmax(0, 1fr) 88px;
+      gap: 8px;
+      align-items: center;
+      min-height: 30px;
+      padding: 0 12px;
+      border-bottom: 1px solid #eef1f5;
+      font-size: 12px;
+    }
+
+    .queue-row.current {
+      background: var(--select);
+    }
+
+    .queue-row.done .queue-status {
+      color: var(--green);
+    }
+
+    .queue-row.error .queue-status,
+    .queue-row.cancelled .queue-status {
+      color: var(--red);
+    }
+
+    .queue-path,
+    .queue-size {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .queue-status {
+      color: var(--muted);
+      font-weight: 650;
+    }
+
+    dialog {
+      width: min(640px, calc(100vw - 32px));
+      border: 1px solid var(--line);
+      padding: 0;
+      color: var(--text);
+      background: #fff;
+    }
+
+    dialog::backdrop {
+      background: rgb(15 23 42 / 0.28);
+    }
+
+    .modal-head, .modal-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .modal-foot {
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+      justify-content: flex-end;
+    }
+
+    .modal-body {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+    }
+
+    .plan-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .metric {
+      border: 1px solid #eef1f5;
+      padding: 8px;
+      min-width: 0;
+    }
+
+    .metric span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .metric strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .warning {
+      color: var(--red);
+    }
+
+    .dashboard-panel {
+      display: block;
+      margin: 10px 12px 0;
+    }
+
+    .dashboard-panel[hidden] {
+      display: none;
+    }
+
+    .dashboard-content {
+      padding: 10px;
+      max-height: 340px;
+      overflow: auto;
+    }
+
+    .mobile-controller-view {
+      display: grid;
+      gap: 10px;
+    }
+
+    .mobile-controller-summary {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(104px, 1fr));
+      gap: 8px;
+    }
+
+    .dashboard-card {
+      border: 1px solid #eef1f5;
+      padding: 8px;
+      min-width: 0;
+      background: #fff;
+    }
+
+    .dashboard-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .dashboard-card strong,
+    .dashboard-row {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .dashboard-section-title {
+      margin-top: 8px;
+      font-weight: 700;
+    }
+
+    .dashboard-row {
+      min-height: 26px;
+      border-bottom: 1px solid #eef1f5;
+      padding: 4px 0;
+    }
+
+    .worker-policy-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 6px;
+    }
+
+    .worker-policy-card {
+      border: 1px solid #eef1f5;
+      padding: 8px;
+      background: #fff;
+      min-width: 0;
+    }
+
+    .worker-policy-card strong,
+    .worker-policy-card div {
+      overflow-wrap: anywhere;
+    }
+
+    .worker-policy-meta {
+      color: var(--muted);
+      font-size: 12px;
+      margin-top: 3px;
+    }
+
+    .worker-policy-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .approval-list {
+      display: grid;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .approval-card {
+      border: 1px solid #eef1f5;
+      border-left: 4px solid #99a3b3;
+      padding: 8px;
+      background: #fff;
+    }
+
+    .approval-card.local-agent {
+      border-left-color: #2f6fed;
+    }
+
+    .approval-card.remote-agent {
+      border-left-color: #b8322a;
+    }
+
+    .approval-meta,
+    .approval-actions {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .approval-id {
+      color: #a15c07;
+      overflow-wrap: anywhere;
+    }
+
+    .approval-route,
+    .approval-summary {
+      margin-top: 4px;
+      overflow-wrap: anywhere;
+    }
+
+    .approval-origin {
+      font-weight: 700;
+    }
+
+    .approval-origin.local-agent {
+      color: #2f6fed;
+    }
+
+    .approval-origin.remote-agent {
+      color: #b8322a;
+    }
+
+    .approval-risk {
+      font-weight: 700;
+    }
+
+    .approval-risk.low {
+      color: #5f6c7b;
+    }
+
+    .approval-risk.medium {
+      color: #a15c07;
+    }
+
+    .approval-risk.high,
+    .approval-risk.critical {
+      color: var(--red);
+    }
+
+    .plan-list {
+      max-height: 160px;
+      overflow: auto;
+      border: 1px solid #eef1f5;
+      padding: 8px;
+      font-family: ui-monospace, SFMono-Regular, Consolas, "Liberation Mono", monospace;
+      font-size: 12px;
+      white-space: pre-wrap;
+    }
+
+    @media (max-width: 820px) {
+      main {
+        grid-template-columns: 1fr;
+        grid-template-rows: repeat(2, minmax(0, 1fr));
+        height: calc(100vh - 112px);
+      }
+
+      footer {
+        grid-template-columns: minmax(0, 1fr);
+        height: auto;
+      }
+
+      .transfer-actions,
+      .footer-actions {
+        justify-content: space-between;
+      }
+
+      .transfer-actions button {
+        flex: 1;
+      }
+
+      .dashboard-panel {
+        margin: 8px;
+      }
+
+      .dashboard-content {
+        max-height: 45vh;
+      }
+
+      .mobile-controller-summary {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .worker-policy-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>agent-remote-sync</h1>
+      <div class="meta" id="remote-meta"></div>
+    </div>
+    <div class="meta" id="local-meta"></div>
+    <button id="dashboard-toggle" style="font-size:12px;margin-left:8px;" onclick="toggleDashboard()">Dashboard</button>
+    <button id="inbox-toggle" style="font-size:12px;margin-left:6px;" onclick="toggleInbox()">Inbox</button>
+  </header>
+
+  <section class="panel dashboard-panel" id="dashboard-panel" hidden>
+    <div class="panel-head"><strong>Swarm Dashboard</strong> <button onclick="loadDashboard()" style="font-size:11px;margin-left:10px;">Refresh</button></div>
+    <div class="dashboard-content" id="dashboard-content">Loading...</div>
+  </section>
+
+  <section class="panel dashboard-panel" id="inbox-panel" hidden>
+    <div class="panel-head"><strong>Inbox &mdash; Received Handoffs / Reports</strong> <button onclick="loadInbox()" style="font-size:11px;margin-left:10px;">Refresh</button></div>
+    <div class="dashboard-content" id="inbox-content">Loading...</div>
+  </section>
+
+  <main>
+    <section class="panel" id="remote-panel">
+      <div class="panel-head">
+        <div class="title">
+          <strong>Remote</strong>
+          <span class="path" id="remote-path">/</span>
+          <span class="storage" id="remote-storage">Free: checking...</span>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button data-action="up" data-side="remote">Up</button>
+        <button data-action="mkdir" data-side="remote">New</button>
+        <button data-action="rename" data-side="remote">Rename</button>
+        <button data-action="move" data-side="remote">Move</button>
+        <button class="danger" data-action="delete" data-side="remote">Delete</button>
+        <button data-action="refresh" data-side="remote">Refresh</button>
+      </div>
+      <div class="list" id="remote-list"></div>
+    </section>
+
+    <section class="panel" id="local-panel">
+      <div class="panel-head">
+        <div class="title">
+          <strong>Local</strong>
+          <span class="path" id="local-path">/</span>
+          <span class="storage" id="local-storage">Free: checking...</span>
+        </div>
+      </div>
+      <div class="toolbar">
+        <button data-action="up" data-side="local">Up</button>
+        <button data-action="mkdir" data-side="local">New</button>
+        <button data-action="rename" data-side="local">Rename</button>
+        <button data-action="move" data-side="local">Move</button>
+        <button class="danger" data-action="delete" data-side="local">Delete</button>
+        <button data-action="refresh" data-side="local">Refresh</button>
+      </div>
+      <div class="list" id="local-list"></div>
+    </section>
+  </main>
+
+  <section class="transfer-monitor" id="transfer-monitor" hidden>
+    <div class="transfer-monitor-head">
+      <div class="transfer-monitor-title">
+        <strong id="transfer-title">Transfer</strong>
+        <span id="transfer-summary">Waiting</span>
+      </div>
+      <button id="transfer-hide" type="button">Hide</button>
+    </div>
+    <div class="transfer-current" id="transfer-current">No active transfer</div>
+    <div class="transfer-queue" id="transfer-queue"></div>
+  </section>
+
+  <footer>
+    <div class="status" id="status">Ready</div>
+    <div class="transfer-actions">
+      <button class="primary" id="upload" title="Send selected local items to the remote folder">Upload &lt;-</button>
+      <button class="primary" id="download" title="Receive selected remote items into the local folder">Download -&gt;</button>
+    </div>
+    <div class="footer-actions">
+      <button class="danger" id="cancel-transfer" type="button" hidden>Cancel</button>
+      <progress id="progress" value="0" max="1"></progress>
+    </div>
+  </footer>
+
+  <dialog id="plan-dialog">
+    <div class="modal-head">
+      <strong id="plan-title">Transfer plan</strong>
+      <button id="plan-close" type="button">Close</button>
+    </div>
+    <div class="modal-body">
+      <div class="plan-grid">
+        <div class="metric"><span>Items</span><strong id="plan-items">0 files</strong></div>
+        <div class="metric"><span>Total size</span><strong id="plan-total">0 B</strong></div>
+        <div class="metric"><span>Needed space</span><strong id="plan-required">0 B</strong></div>
+        <div class="metric"><span>Destination free</span><strong id="plan-free">0 B</strong></div>
+      </div>
+      <label id="plan-overwrite-row">
+        <input id="plan-overwrite" type="checkbox">
+        Overwrite conflicting files
+      </label>
+      <div class="warning" id="plan-warning"></div>
+      <div class="plan-list" id="plan-files"></div>
+    </div>
+    <div class="modal-foot">
+      <button id="plan-cancel" type="button">Cancel</button>
+      <button class="primary" id="plan-start" type="button">Start</button>
+    </div>
+  </dialog>
+
+  <dialog id="input-dialog">
+    <form method="dialog" id="input-form">
+      <div class="modal-head">
+        <strong id="input-title">Input</strong>
+      </div>
+      <div class="modal-body">
+        <label>
+          <span id="input-label">Value</span>
+          <input id="input-value" type="text" autocomplete="off">
+        </label>
+      </div>
+      <div class="modal-foot">
+        <button id="input-cancel" type="button">Cancel</button>
+        <button class="primary" id="input-ok" type="submit">OK</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    const state = {
+      remotePath: "/",
+      localPath: "/",
+      remoteParent: "/",
+      localParent: "/",
+      selected: { remote: [], local: [] },
+      currentJobId: "",
+      activeTransfer: null
+    };
+
+    const statusEl = document.getElementById("status");
+    const progressEl = document.getElementById("progress");
+    const cancelTransferEl = document.getElementById("cancel-transfer");
+    const transferMonitorEl = document.getElementById("transfer-monitor");
+    const transferTitleEl = document.getElementById("transfer-title");
+    const transferSummaryEl = document.getElementById("transfer-summary");
+    const transferCurrentEl = document.getElementById("transfer-current");
+    const transferQueueEl = document.getElementById("transfer-queue");
+    const transferHideEl = document.getElementById("transfer-hide");
+    const planDialog = document.getElementById("plan-dialog");
+    const inputDialog = document.getElementById("input-dialog");
+    const inputForm = document.getElementById("input-form");
+    const inputValue = document.getElementById("input-value");
+
+    async function api(url, options = {}) {
+      let response;
+      try {
+        response = await fetch(url, {
+          headers: { "Content-Type": "application/json" },
+          ...options
+        });
+      } catch (error) {
+        throw new Error("Cannot reach the local agent-remote-sync GUI server. The master process may have stopped; restart master mode and reload this page.");
+      }
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(data.message || data.error || response.statusText);
+      }
+      return data;
+    }
+
+    function setStatus(text) {
+      statusEl.textContent = text;
+    }
+
+    function setCurrentJob(id) {
+      state.currentJobId = id || "";
+      cancelTransferEl.hidden = !state.currentJobId;
+    }
+
+    function setActiveTransfer(plan, verb) {
+      let offset = 0;
+      state.activeTransfer = {
+        verb,
+        totalBytes: Number(plan.totalBytes || 0),
+        totalFiles: Number(plan.totalFiles || 0),
+        totalDirs: Number(plan.totalDirs || 0),
+        files: plan.files.map((item) => {
+          const size = Number(item.size || 0);
+          const row = {
+            source: item.source,
+            target: item.target,
+            size,
+            startBytes: offset,
+            endBytes: offset + size
+          };
+          offset += size;
+          return row;
+        })
+      };
+      transferMonitorEl.hidden = false;
+      renderTransferMonitor();
+    }
+
+    function renderTransferMonitor(job = null) {
+      const transfer = state.activeTransfer;
+      if (!transfer) {
+        transferMonitorEl.hidden = true;
+        return;
+      }
+      transferMonitorEl.hidden = false;
+      const stateText = job ? job.state : "queued";
+      const doneBytes = Number(job?.doneBytes || 0);
+      const totalBytes = Number(job?.totalBytes || transfer.totalBytes || 0);
+      const speed = Number(job?.speedBytesPerSecond || 0);
+      const eta = Number(job?.etaSeconds || 0);
+      const liveStats = speed > 0
+        ? ` · ${formatBytes(speed)}/s${eta > 0 ? ` · ETA ${formatDuration(eta)}` : ""}`
+        : "";
+      transferTitleEl.textContent = `${transfer.verb} transfer`;
+      transferSummaryEl.textContent =
+        `${stateText}: ${formatBytes(doneBytes)} / ${formatBytes(totalBytes)}${liveStats} · ${transfer.totalFiles} file(s), ${transfer.totalDirs} folder(s)`;
+      if (job?.state === "done") {
+        transferCurrentEl.textContent = "Completed";
+      } else if (job?.state === "cancelled") {
+        transferCurrentEl.textContent = job.error ? `Cancelled: ${job.error}` : "Cancelled";
+      } else if (job?.state === "error") {
+        transferCurrentEl.textContent = job.error ? `Error: ${job.error}` : "Error";
+      } else {
+        transferCurrentEl.textContent = job?.current ? `Current: ${job.current}` : "Waiting to start";
+      }
+      progressEl.max = totalBytes || 1;
+      progressEl.value = Math.min(doneBytes, totalBytes || 1);
+      transferQueueEl.innerHTML = transfer.files.map((item) => {
+        const pair = `${item.source} -> ${item.target}`;
+        const rowState = transferRowState(item, pair, job, doneBytes);
+        return `<div class="queue-row ${rowState}">
+          <span class="queue-status">${escapeHtml(rowState)}</span>
+          <span class="queue-path" title="${escapeAttr(pair)}">${escapeHtml(pair)}</span>
+          <span class="queue-size">${formatBytes(item.size)}</span>
+        </div>`;
+      }).join("") || `<div class="queue-row done">
+        <span class="queue-status">done</span>
+        <span class="queue-path">No files to transfer.</span>
+        <span class="queue-size">0 B</span>
+      </div>`;
+    }
+
+    function transferRowState(item, pair, job, doneBytes) {
+      if (!job) return "pending";
+      if (job.state === "error") return pair === job.current ? "error" : "pending";
+      if (job.state === "cancelled") return pair === job.current ? "cancelled" : "pending";
+      if (job.state === "done") return "done";
+      if (pair === job.current) return "current";
+      if (doneBytes >= item.endBytes) return "done";
+      if (doneBytes > item.startBytes && doneBytes < item.endBytes) return "current";
+      return "pending";
+    }
+
+    function formatBytes(value) {
+      let amount = Number(value || 0);
+      for (const suffix of ["B", "KB", "MB", "GB", "TB"]) {
+        if (amount < 1024 || suffix === "TB") {
+          return suffix === "B" ? `${amount} ${suffix}` : `${amount.toFixed(1)} ${suffix}`;
+        }
+        amount /= 1024;
+      }
+    }
+
+    function formatDuration(seconds) {
+      let remaining = Math.max(0, Math.round(Number(seconds || 0)));
+      const hours = Math.floor(remaining / 3600);
+      remaining %= 3600;
+      const minutes = Math.floor(remaining / 60);
+      const secs = remaining % 60;
+      if (hours) return `${hours}h ${minutes}m`;
+      if (minutes) return `${minutes}m ${secs}s`;
+      return `${secs}s`;
+    }
+
+    function formatTime(value) {
+      if (!value) return "";
+      return new Date(value * 1000).toLocaleString();
+    }
+
+    async function load(side) {
+      const data = await api(`/api/${side}/list?path=${encodeURIComponent(state[`${side}Path`])}`);
+      state[`${side}Path`] = data.path;
+      state[`${side}Parent`] = data.parent;
+      state.selected[side] = [];
+      document.getElementById(`${side}-path`).textContent = data.path;
+      renderList(side, data.entries);
+    }
+
+    async function loadStorage(side) {
+      const data = await api(`/api/${side}/storage`);
+      document.getElementById(`${side}-storage`).textContent =
+        `Free: ${formatBytes(data.freeBytes)} / ${formatBytes(data.totalBytes)}`;
+    }
+
+    function renderList(side, entries) {
+      const host = document.getElementById(`${side}-list`);
+      const rows = entries.map((entry) => {
+        const type = entry.type === "dir" ? "dir" : entry.type;
+        const size = entry.type === "file" ? formatBytes(entry.size) : "";
+        return `<tr data-path="${escapeAttr(entry.path)}" data-type="${entry.type}">
+          <td title="${escapeAttr(entry.name)}">${escapeHtml(entry.name)}</td>
+          <td class="kind">${type}</td>
+          <td class="size">${size}</td>
+          <td class="modified">${formatTime(entry.modified)}</td>
+        </tr>`;
+      }).join("");
+      host.innerHTML = `<table>
+        <thead><tr><th>Name</th><th class="kind">Type</th><th class="size">Size</th><th class="modified">Modified</th></tr></thead>
+        <tbody>${rows || `<tr><td colspan="4">Empty</td></tr>`}</tbody>
+      </table>`;
+      host.querySelectorAll("tr[data-path]").forEach((row) => {
+        row.addEventListener("click", (event) => selectRow(side, row, event));
+        row.addEventListener("dblclick", () => {
+          if (row.dataset.type === "dir") {
+            state[`${side}Path`] = row.dataset.path;
+            load(side).catch(showError);
+          }
+        });
+      });
+    }
+
+    function selectRow(side, row, event) {
+      const item = { path: row.dataset.path, type: row.dataset.type };
+      const current = state.selected[side];
+      if (event.ctrlKey || event.metaKey) {
+        const exists = current.some((entry) => entry.path === item.path);
+        state.selected[side] = exists ? current.filter((entry) => entry.path !== item.path) : [...current, item];
+      } else {
+        state.selected[side] = [item];
+      }
+      syncSelectionStyles(side);
+    }
+
+    function syncSelectionStyles(side) {
+      const selectedPaths = new Set(state.selected[side].map((entry) => entry.path));
+      document.querySelectorAll(`#${side}-list tr[data-path]`).forEach((row) => {
+        row.classList.toggle("selected", selectedPaths.has(row.dataset.path));
+      });
+    }
+
+    function selectedItems(side) {
+      return state.selected[side];
+    }
+
+    function selectedOne(side) {
+      const items = selectedItems(side);
+      return items.length === 1 ? items[0] : null;
+    }
+
+    function selectedDestinationDir(side) {
+      const items = selectedItems(side);
+      if (!items.length) return state[`${side}Path`];
+      if (items.length === 1 && items[0].type === "dir") return items[0].path;
+      throw new Error(`Select one ${side} folder as the destination, or clear the ${side} selection.`);
+    }
+
+    function baseName(path) {
+      const parts = String(path || "").split("/").filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : "";
+    }
+
+    function escapeHtml(text) {
+      return String(text).replace(/[&<>"']/g, (ch) => ({
+        "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+      }[ch]));
+    }
+
+    function escapeAttr(text) {
+      return escapeHtml(text);
+    }
+
+    function askText(title, label, initialValue = "") {
+      return new Promise((resolve) => {
+        const finish = (value) => {
+          inputForm.onsubmit = null;
+          document.getElementById("input-cancel").onclick = null;
+          inputDialog.oncancel = null;
+          if (inputDialog.open) inputDialog.close();
+          resolve(value);
+        };
+        document.getElementById("input-title").textContent = title;
+        document.getElementById("input-label").textContent = label;
+        inputValue.value = initialValue;
+        inputForm.onsubmit = (event) => {
+          event.preventDefault();
+          const value = inputValue.value.trim();
+          finish(value || null);
+        };
+        document.getElementById("input-cancel").onclick = () => finish(null);
+        inputDialog.oncancel = () => finish(null);
+        inputDialog.showModal();
+        inputValue.focus();
+        inputValue.select();
+      });
+    }
+
+    async function runPanelAction(side, action) {
+      if (action === "refresh") {
+        await Promise.all([load(side), loadStorage(side)]);
+        return;
+      }
+      if (action === "up") {
+        state[`${side}Path`] = state[`${side}Parent`];
+        await load(side);
+        return;
+      }
+      if (action === "mkdir") {
+        const name = await askText("New folder", "Folder name");
+        if (!name) return;
+        await api(`/api/${side}/mkdir`, {
+          method: "POST",
+          body: JSON.stringify({ parent: state[`${side}Path`], name })
+        });
+        await Promise.all([load(side), loadStorage(side)]);
+        return;
+      }
+      const selected = selectedItems(side);
+      if (!selected) {
+        alert(`Select a ${side} item first.`);
+        return;
+      }
+      if (action === "delete") {
+        if (!selected.length) {
+          alert(`Select a ${side} item first.`);
+          return;
+        }
+        if (!confirm(`Delete ${selected.length} selected item(s) immediately?`)) return;
+        for (const item of selected) {
+          await api(`/api/${side}/delete`, {
+            method: "POST",
+            body: JSON.stringify({ path: item.path })
+          });
+        }
+      } else if (action === "rename") {
+        const one = selectedOne(side);
+        if (!one) {
+          alert("Select exactly one item to rename.");
+          return;
+        }
+        const name = await askText("Rename item", "New name", baseName(one.path));
+        if (!name) return;
+        await api(`/api/${side}/rename`, {
+          method: "POST",
+          body: JSON.stringify({ path: one.path, newName: name })
+        });
+      } else if (action === "move") {
+        const one = selectedOne(side);
+        if (!one) {
+          alert("Select exactly one item to move.");
+          return;
+        }
+        const destDir = await askText("Move item", "Destination folder path", state[`${side}Path`]);
+        if (!destDir) return;
+        await api(`/api/${side}/move`, {
+          method: "POST",
+          body: JSON.stringify({ path: one.path, destDir })
+        });
+      }
+      await Promise.all([load(side), loadStorage(side)]);
+    }
+
+    async function startUpload() {
+      const selected = selectedItems("local");
+      if (!selected.length) {
+        alert("Select one or more local items first.");
+        return;
+      }
+      const body = { paths: selected.map((item) => item.path), remoteDir: selectedDestinationDir("remote") };
+      const plan = await api("/api/plan/upload", { method: "POST", body: JSON.stringify(body) });
+      const overwrite = await showPlanDialog(plan, "Upload");
+      if (overwrite === null) return;
+      setActiveTransfer(plan, "Upload");
+      const job = await api("/api/jobs/upload", {
+        method: "POST",
+        body: JSON.stringify({ planId: plan.planId, overwrite })
+      });
+      setCurrentJob(job.id);
+      pollJob(job.id);
+    }
+
+    async function startDownload() {
+      const selected = selectedItems("remote");
+      if (!selected.length) {
+        alert("Select one or more remote items first.");
+        return;
+      }
+      const body = { paths: selected.map((item) => item.path), localDir: selectedDestinationDir("local") };
+      const plan = await api("/api/plan/download", { method: "POST", body: JSON.stringify(body) });
+      const overwrite = await showPlanDialog(plan, "Download");
+      if (overwrite === null) return;
+      setActiveTransfer(plan, "Download");
+      const job = await api("/api/jobs/download", {
+        method: "POST",
+        body: JSON.stringify({ planId: plan.planId, overwrite })
+      });
+      setCurrentJob(job.id);
+      pollJob(job.id);
+    }
+
+    function showPlanDialog(plan, verb) {
+      return new Promise((resolve) => {
+        const conflictCount = plan.conflicts.length;
+        const warningText = plan.warnings.map((item) => item.message).join("\n");
+        document.getElementById("plan-title").textContent = `${verb} plan`;
+        document.getElementById("plan-items").textContent = `${plan.totalFiles} file(s), ${plan.totalDirs} folder(s)`;
+        document.getElementById("plan-total").textContent = formatBytes(plan.totalBytes);
+        document.getElementById("plan-required").textContent = formatBytes(plan.requiredBytes);
+        document.getElementById("plan-free").textContent = formatBytes(plan.destinationStorage.freeBytes);
+        document.getElementById("plan-warning").textContent = warningText;
+        document.getElementById("plan-files").textContent = plan.files.slice(0, 80)
+          .map((item) => `${item.source} -> ${item.target}`)
+          .join("\n") || "No files to transfer.";
+        const overwriteRow = document.getElementById("plan-overwrite-row");
+        const overwriteInput = document.getElementById("plan-overwrite");
+        const startButton = document.getElementById("plan-start");
+        overwriteRow.hidden = conflictCount === 0;
+        overwriteInput.checked = false;
+
+        const updateStartState = () => {
+          startButton.disabled = !plan.canStart || (conflictCount > 0 && !overwriteInput.checked);
+        };
+        updateStartState();
+        overwriteInput.onchange = updateStartState;
+        document.getElementById("plan-close").onclick = () => {
+          planDialog.close();
+          resolve(null);
+        };
+        document.getElementById("plan-cancel").onclick = () => {
+          planDialog.close();
+          resolve(null);
+        };
+        startButton.onclick = () => {
+          planDialog.close();
+          resolve(overwriteInput.checked);
+        };
+        planDialog.oncancel = () => resolve(null);
+        planDialog.showModal();
+      });
+    }
+
+    async function pollJob(id) {
+      const job = await api(`/api/jobs/${id}`);
+      const total = job.totalBytes || 1;
+      progressEl.max = total;
+      progressEl.value = Math.min(job.doneBytes || 0, total);
+      renderTransferMonitor(job);
+      setStatus(`${job.state}: ${job.current || job.kind} (${formatBytes(job.doneBytes)} / ${formatBytes(job.totalBytes)})`);
+      if (job.state === "running" || job.state === "queued") {
+        setTimeout(() => pollJob(id).catch(showError), 700);
+      } else {
+        setCurrentJob("");
+        if (job.state === "error") {
+          setStatus(`error: ${job.error}`);
+        } else if (job.state === "cancelled") {
+          setStatus("transfer cancelled");
+        } else {
+          setStatus(`${job.kind} complete`);
+          await Promise.all([load("remote"), load("local"), loadStorage("remote"), loadStorage("local")]);
+        }
+      }
+    }
+
+    async function cancelCurrentJob() {
+      if (!state.currentJobId) return;
+      const id = state.currentJobId;
+      cancelTransferEl.disabled = true;
+      try {
+        await api(`/api/jobs/${encodeURIComponent(id)}/cancel`, {
+          method: "POST",
+          body: JSON.stringify({})
+        });
+        setStatus("cancelling transfer...");
+      } finally {
+        cancelTransferEl.disabled = false;
+      }
+    }
+
+    function showError(error) {
+      console.error(error);
+      setStatus(`error: ${error.message}`);
+      if (state.activeTransfer) {
+        renderTransferMonitor({
+          state: "error",
+          error: error.message,
+          current: "",
+          doneBytes: progressEl.value || 0,
+          totalBytes: progressEl.max || state.activeTransfer.totalBytes || 0
+        });
+      }
+      alert(error.message);
+    }
+
+    document.querySelectorAll(".toolbar button").forEach((button) => {
+      button.addEventListener("click", () => {
+        runPanelAction(button.dataset.side, button.dataset.action).catch(showError);
+      });
+    });
+    document.getElementById("upload").addEventListener("click", () => startUpload().catch(showError));
+    document.getElementById("download").addEventListener("click", () => startDownload().catch(showError));
+    cancelTransferEl.addEventListener("click", () => cancelCurrentJob().catch(showError));
+    transferHideEl.addEventListener("click", () => {
+      transferMonitorEl.hidden = true;
+    });
+
+    api("/api/bootstrap").then((data) => {
+      document.getElementById("remote-meta").textContent = data.remoteBase;
+      document.getElementById("local-meta").textContent = data.localRoot;
+      return Promise.all([load("remote"), load("local"), loadStorage("remote"), loadStorage("local")]);
+    }).catch(showError);
+
+    function toggleDashboard() {
+      const panel = document.getElementById("dashboard-panel");
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) loadDashboard();
+    }
+
+    function loadDashboard() {
+      api("/api/dashboard").then((data) => {
+        const nodes = data.nodes || [];
+        const calls = data.recentCalls || [];
+        const processes = data.processes || [];
+        const profiles = data.daemonProfiles || [];
+        const summaries = data.summaries || {};
+        const nodeSummary = summaries.nodes || {};
+        const callSummary = summaries.calls || {};
+        const processSummary = summaries.processes || {};
+        const approvalSummary = summaries.approvals || {};
+        const profileSummary = summaries.profiles || {};
+        let html = `<div class="mobile-controller-view" data-mobile-controller-view="true">
+          <div class="mobile-controller-summary">
+            <div class="dashboard-card"><span>Nodes</span><strong>${esc(String(nodeSummary.total ?? nodes.length))}</strong></div>
+            <div class="dashboard-card"><span>Online</span><strong>${esc(String(nodeSummary.online ?? data.activeSessions ?? 0))}</strong></div>
+            <div class="dashboard-card"><span>Calls pending</span><strong>${esc(String(callSummary.pending ?? 0))}</strong></div>
+            <div class="dashboard-card"><span>Approvals</span><strong>${esc(String(approvalSummary.pending ?? 0))}</strong></div>
+            <div class="dashboard-card"><span>Processes</span><strong>${esc(String(processSummary.running ?? 0))}/${esc(String(processSummary.total ?? processes.length))}</strong></div>
+            <div class="dashboard-card"><span>Profiles</span><strong>${esc(String(profileSummary.running ?? 0))}/${esc(String(profileSummary.total ?? profiles.length))}</strong></div>
+          </div>
+          <div>
+          <button onclick="refreshAllNodes()" style="font-size:11px">Refresh All</button>
+          <button onclick="refreshCalls()" style="font-size:11px;margin-left:6px">Refresh Calls</button>
+        </div>
+        <table style="width:100%;font-size:12px;border-collapse:collapse;">
+          <tr style="font-weight:bold"><td>Node</td><td>Status</td><td>Route</td><td>Policy</td><td>Latest</td><td>Approvals</td><td></td></tr>`;
+        for (const node of nodes) {
+          const route = node.route ? esc(node.route.host+":"+node.route.port) : "-";
+          const st = node.status || "unknown";
+          const color = st === "online" ? "green" : (st === "offline" ? "red" : "#666");
+          const latest = node.latestCall ? `${esc(node.latestCall.state || "?")} ${esc(node.latestCall.callId || "")}` : "-";
+          html += `<tr><td>${esc(node.name)}</td><td style="color:${color}">${esc(st)}</td><td>${route}</td><td>${esc(node.policy||"-")}</td><td>${latest}</td><td>${esc(String(node.pendingApprovals || 0))}</td>
+            <td><button onclick="refreshNode(decodeURIComponent('${encodeURIComponent(node.name)}'))" style="font-size:10px">&#x21bb;</button></td></tr>`;
+        }
+        html += "</table>";
+        if (calls.length) {
+          html += `<div class="dashboard-section-title">Recent Calls</div>`;
+          for (const call of calls.slice(0, 8)) {
+            const st = call.state || "?";
+            const stColor = st === "reported" ? "green" : (st === "failed" ? "red" : (st === "sent" ? "#a15c07" : "#666"));
+            html += `<div class="dashboard-row"><span style="cursor:pointer;color:${stColor}" onclick="showCallDetail(decodeURIComponent('${encodeURIComponent(call.callId)}'))">${esc(call.callId)}</span> -> ${esc(call.targetNode)} [${esc(st)}]</div>`;
+          }
+        }
+        if (processes.length) {
+          html += `<div class="dashboard-section-title">Local Processes</div>`;
+          for (const proc of processes) {
+            const stColor = proc.status === "running" ? "green" : "#666";
+            const processId = encodeURIComponent(proc.id);
+            html += `<div class="dashboard-row"><span style="color:${stColor}">${esc(proc.role)}</span> pid=${esc(String(proc.pid))} root=${esc(proc.root||"")} port=${esc(String(proc.port||""))}`;
+            html += ` <button onclick="stopProcess(decodeURIComponent('${processId}'))" style="font-size:10px">stop</button>`;
+            html += ` <button onclick="forgetProcess(decodeURIComponent('${processId}'))" style="font-size:10px">forget</button></div>`;
+          }
+        }
+        if (profiles.length) {
+          html += `<div class="dashboard-section-title">Daemon Profiles</div>`;
+          for (const profile of profiles) {
+            const st = profile.status || "not-running";
+            const stColor = st === "running" ? "green" : "#666";
+            const profileName = encodeURIComponent(profile.name || "");
+            html += `<div class="dashboard-row"><span style="color:${stColor}">${esc(profile.name || "")}</span> ${esc(profile.host || "")}:${esc(String(profile.port || ""))} ${esc(st)} root=${esc(profile.root || "")}`;
+            html += ` <button onclick="forgetProfile(decodeURIComponent('${profileName}'))" style="font-size:10px">forget</button></div>`;
+          }
+        }
+        html += renderApprovalList(data.pendingApprovals || []);
+        html += "</div>";
+        document.getElementById("dashboard-content").innerHTML = html;
+        loadWorkerPolicy();
+      }).catch((err) => {
+        document.getElementById("dashboard-content").innerHTML = `<div class="dashboard-row" style="color:#b91c1c">${esc(err.message || "Dashboard unavailable")}</div>`;
+      });
+    }
+
+    function loadWorkerPolicy() {
+      return api("/api/worker-policy").then((data) => {
+        const rules = data.rules || [];
+        const templates = data.templates || [];
+        let html = document.getElementById("dashboard-content").innerHTML;
+        html += `<div class="dashboard-section-title">Worker Policy</div>`;
+        html += `<div class="dashboard-row">Policy: ${data.hasPolicy ? "installed" : "missing"} - Rules: ${esc(String(data.ruleCount || 0))}
+          <button onclick="initWorkerPolicy()" style="font-size:10px;margin-left:6px">init</button></div>`;
+        if (rules.length) {
+          html += `<div class="worker-policy-grid">`;
+          for (const rule of rules) {
+            const ruleName = String(rule.name || "");
+            const ruleArg = encodeURIComponent(ruleName);
+            html += `<div class="worker-policy-card">`;
+            html += `<strong>${esc(ruleName)}</strong> <span class="worker-policy-meta">${esc(rule.command || "")}</span>`;
+            html += `<div class="worker-policy-meta">args=${esc(JSON.stringify(rule.argsPattern || "*"))}</div>`;
+            html += `<div class="worker-policy-meta">timeout=${esc(String(rule.timeoutSeconds || ""))}s stdout=${esc(String(rule.maxStdoutBytes || 0))} shell=${esc(String(Boolean(rule.shell)))}</div>`;
+            if (rule.description) html += `<div class="worker-policy-meta">${esc(rule.description)}</div>`;
+            html += `<div class="worker-policy-actions"><button onclick="removeWorkerPolicyRule(decodeURIComponent('${ruleArg}'))" style="font-size:10px">remove</button></div>`;
+            html += `</div>`;
+          }
+          html += `</div>`;
+        }
+        if (templates.length) {
+          html += `<div class="dashboard-section-title">Policy Templates</div><div class="worker-policy-grid">`;
+          for (const tmpl of templates) {
+            const name = String(tmpl.name || "");
+            const nameArg = encodeURIComponent(name);
+            html += `<div class="worker-policy-card">`;
+            html += `<strong>${esc(name)}</strong> <span class="worker-policy-meta">${esc(tmpl.command || "")}</span>`;
+            html += `<div class="worker-policy-meta">${esc(tmpl.description || "")}</div>`;
+            html += `<div class="worker-policy-meta">shell=${esc(String(Boolean(tmpl.shell)))} timeout=${esc(String(tmpl.timeoutSeconds || ""))}s</div>`;
+            html += `<div class="worker-policy-actions"><button onclick="applyWorkerPolicyTemplate(decodeURIComponent('${nameArg}'))" style="font-size:10px">apply</button></div>`;
+            html += `</div>`;
+          }
+          html += `</div>`;
+        }
+        document.getElementById("dashboard-content").innerHTML = html;
+      }).catch(() => {});
+    }
+
+    function initWorkerPolicy() {
+      api("/api/worker-policy/init", { method: "POST", body: JSON.stringify({}) }).then(() => loadDashboard()).catch(showError);
+    }
+
+    function applyWorkerPolicyTemplate(name) {
+      api("/api/worker-policy/apply-template", { method: "POST", body: JSON.stringify({template: name}) }).then(() => loadDashboard()).catch(showError);
+    }
+
+    function removeWorkerPolicyRule(name) {
+      if (!confirm("Remove this worker policy rule?")) return;
+      api("/api/worker-policy/remove", { method: "POST", body: JSON.stringify({name: name}) }).then(() => loadDashboard()).catch(showError);
+    }
+
+    function refreshNode(name) {
+      document.getElementById("dashboard-content").innerHTML = "Refreshing...";
+      api("/api/dashboard/refresh-node", { method: "POST", body: JSON.stringify({node: name}) }).then(() => loadDashboard());
+    }
+
+    function refreshAllNodes() {
+      document.getElementById("dashboard-content").innerHTML = "Refreshing all nodes...";
+      api("/api/dashboard/refresh-all", { method: "POST" }).then(() => loadDashboard());
+    }
+
+    function refreshCalls() {
+      api("/api/dashboard/calls-refresh", { method: "POST" }).then(() => loadDashboard());
+    }
+
+    function showCallDetail(callId) {
+      api("/api/dashboard/call/" + encodeURIComponent(callId)).then((data) => {
+        let html = `<div style="padding:4px"><strong>Call:</strong> ${esc(data.callId)}<br>
+          <strong>Target:</strong> ${esc(data.targetNode)}<br>
+          <strong>State:</strong> ${esc(data.state)}<br>
+          <strong>Sent:</strong> ${data.sentAt ? new Date(data.sentAt*1000).toLocaleString() : "-"}<br>
+          <strong>Reported:</strong> ${data.reportedAt ? new Date(data.reportedAt*1000).toLocaleString() : "-"}<br>
+          <button onclick="loadDashboard()" style="font-size:11px;margin-top:4px">Back</button></div>`;
+        document.getElementById("dashboard-content").innerHTML = html;
+      }).catch(() => alert("Call not found"));
+    }
+
+    function esc(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;").replace(/'/g,"&#39;"); }
+
+    function stopProcess(id) {
+      if (!confirm("Stop this process?")) return;
+      api("/api/dashboard/process/stop", { method: "POST", body: JSON.stringify({id: id}) }).then(() => loadDashboard());
+    }
+
+    function forgetProcess(id) {
+      api("/api/dashboard/process/forget", { method: "POST", body: JSON.stringify({id: id}) }).then(() => loadDashboard());
+    }
+
+    function forgetProfile(name) {
+      if (!confirm("Forget this daemon profile?")) return;
+      api("/api/dashboard/profile/forget", { method: "POST", body: JSON.stringify({name: name}) }).then(() => loadDashboard()).catch(showError);
+    }
+
+    function loadApprovals() {
+      api("/api/approvals").then((data) => {
+        const items = (data.approvals||[]).filter(a => a.status === "pending");
+        let html = document.getElementById("dashboard-content").innerHTML;
+        html += renderApprovalList(items);
+        document.getElementById("dashboard-content").innerHTML = html;
+      }).catch(() => {});
+    }
+
+    function renderApprovalList(items) {
+      if (!items.length) return "";
+      let html = `<div class="dashboard-section-title">Pending Approvals</div><div class="approval-list">`;
+      for (const a of items) {
+        const rawOriginType = String(a.originType || "unknown").toLowerCase();
+        const originClass = rawOriginType === "remote-agent" ? "remote-agent" : (rawOriginType === "local-agent" ? "local-agent" : "unknown-agent");
+        const origin = String(a.originType || "unknown") + (a.originNode ? " / " + String(a.originNode) : "");
+        const target = a.targetNode ? " -> " + String(a.targetNode) : "";
+        const risk = String(a.risk || "medium").toLowerCase();
+        const riskClass = ["low", "medium", "high", "critical"].includes(risk) ? risk : "medium";
+        const approvalId = String(a.approvalId || "");
+        const approvalIdArg = encodeURIComponent(approvalId);
+        html += `<div class="approval-card ${originClass}">`;
+        html += `<div class="approval-meta"><span class="approval-risk ${riskClass}">[${esc(riskClass)}]</span>`;
+        html += `<span class="approval-id">${esc(approvalId)}</span></div>`;
+        html += `<div class="approval-route"><span class="approval-origin ${originClass}">${esc(origin)}</span>${esc(target)}</div>`;
+        html += `<div class="approval-summary">${esc(a.summary||a.requestedAction||"")}</div>`;
+        html += `<div class="approval-actions">`;
+        html += `<button onclick="decideApproval(decodeURIComponent('${approvalIdArg}'),'approved')" style="font-size:10px">&#x2713; Approve</button>`;
+        html += `<button onclick="decideApproval(decodeURIComponent('${approvalIdArg}'),'denied')" style="font-size:10px">&#x2717; Deny</button>`;
+        html += `</div>`;
+        html += `</div>`;
+      }
+      html += `</div>`;
+      return html;
+    }
+
+    function decideApproval(id, decision) {
+      api("/api/approvals/decide", { method: "POST", body: JSON.stringify({id: id, decision: decision}) }).then(() => loadDashboard());
+    }
+
+    function toggleInbox() {
+      const panel = document.getElementById("inbox-panel");
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) loadInbox();
+    }
+
+    function loadInbox() {
+      api("/api/inbox").then((data) => {
+        const items = data.items || [];
+        let html = `<div class="dashboard-row">${items.length} item(s) in local inbox</div>`;
+        for (const item of items) {
+          if (item.type === "instruction") {
+            const st = item.state || "received";
+            const stColor = st === "completed" ? "green" : (st === "failed" ? "red" : (st === "claimed" ? "#a15c07" : "#666"));
+            const from = esc(String(item.from || "unknown"));
+            const task = esc(String(item.task || "").slice(0, 120));
+            const id = esc(String(item.id || ""));
+            const auto = item.autoRun ? " auto" : "";
+            html += `<div class="dashboard-row">`;
+            html += `<span style="color:${stColor};font-weight:650">[${esc(st)}]</span>`;
+            html += ` <strong>${from}</strong>: ${task}`;
+            html += ` <span style="color:var(--muted);font-size:11px">(${id}${auto})</span>`;
+            if (item.handoffFile) {
+              const fn = encodeURIComponent(item.handoffFile.split("/").pop() || "");
+              html += ` <button onclick="readHandoff(decodeURIComponent('${fn}'))" style="font-size:10px">view</button>`;
+            }
+            html += `</div>`;
+          } else if (item.type === "handoff") {
+            const fn = encodeURIComponent(item.filename || "");
+            html += `<div class="dashboard-row">`;
+            html += `<span style="color:#0f766e;font-weight:650">[handoff]</span>`;
+            html += ` <span>${esc(String(item.filename || ""))}</span>`;
+            html += ` <button onclick="readHandoff(decodeURIComponent('${fn}'))" style="font-size:10px">view</button>`;
+            html += `</div>`;
+          }
+        }
+        if (!items.length) {
+          html += `<div class="dashboard-row" style="color:var(--muted)">No received handoffs or instructions. Incoming handoffs/reports from agent-remote-sync tell/handoff/report will appear here.</div>`;
+        }
+        document.getElementById("inbox-content").innerHTML = html;
+      }).catch((err) => {
+        document.getElementById("inbox-content").innerHTML = `<div class="dashboard-row" style="color:#b91c1c">${esc(err.message || "Inbox unavailable")}</div>`;
+      });
+    }
+
+    function readHandoff(filename) {
+      const contentEl = document.getElementById("inbox-content");
+      contentEl.innerHTML = "Loading...";
+      api("/api/inbox/read", { method: "POST", body: JSON.stringify({filename: filename}) }).then((data) => {
+        let html = `<button onclick="loadInbox()" style="font-size:11px;margin-bottom:6px">Back to Inbox</button>`;
+        html += `<pre style="white-space:pre-wrap;font-size:12px;max-height:360px;overflow:auto;border:1px solid #eef1f5;padding:8px">${esc(data.content || "")}</pre>`;
+        contentEl.innerHTML = html;
+      }).catch((err) => {
+        contentEl.innerHTML = `<button onclick="loadInbox()" style="font-size:11px;margin-bottom:6px">Back to Inbox</button><div style="color:red">Error: ${esc(err.message)}</div>`;
+      });
+    }
+  </script>
+</body>
+</html>

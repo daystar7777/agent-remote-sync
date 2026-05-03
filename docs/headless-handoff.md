@@ -1,6 +1,6 @@
 # Headless Sync and Handoff
 
-agentFTP extends agent-work-mem across hosts. It supports both human-driven
+agent-remote-sync extends agent-work-mem across hosts. It supports both human-driven
 browser transfers and agent-driven headless transfers, with AICP handoff records
 written on both machines.
 
@@ -9,10 +9,10 @@ written on both machines.
 Headless mode is for commands that can run without opening the browser UI:
 
 ```powershell
-agentftp connect lab 100.64.1.20
-agentftp push lab ./project /incoming/project
-agentftp pull lab /result ./received
-agentftp handoff lab ./LLL "Use the uploaded file to do ZZZ and report back."
+agentremote connect lab 100.64.1.20
+agentremote push lab ./project /incoming/project
+agentremote pull lab /result ./received
+agentremote handoff lab ./LLL "Use the uploaded file to do ZZZ and report back."
 ```
 
 The same resumable chunk protocol is used. If a target file already exists, the
@@ -24,10 +24,10 @@ conflict list in non-interactive terminals unless `--overwrite` is supplied.
 Sync is a higher-level operation over push/pull:
 
 ```powershell
-agentftp sync plan lab ./project /project
-agentftp sync push lab ./project /project --compare-hash
-agentftp sync pull lab /project ./project
-agentftp sync push lab ./project /project --delete
+agentremote sync plan lab ./project /project
+agentremote sync push lab ./project /project --compare-hash
+agentremote sync pull lab /project ./project
+agentremote sync push lab ./project /project --delete
 ```
 
 The implemented sync is conservative:
@@ -40,24 +40,24 @@ The implemented sync is conservative:
 - never delete missing files by default,
 - delete file candidates only when `--delete` is explicit,
 - write a JSON plan before applying changes,
-- record sessions/logs under `.agentftp`.
+- record sessions/logs under `.agentremote`.
 
 ## Handoff
 
 The natural-language target experience is:
 
-- "Use agentFTP to send folder `KKK` to `XXX`."
-- "Use agentFTP to send file `LLL` to `XXX`, tell it to do `ZZZ`, then report
+- "Use agent-remote-sync to send folder `KKK` to `XXX`."
+- "Use agent-remote-sync to send file `LLL` to `XXX`, tell it to do `ZZZ`, then report
   back."
-- "Use agentFTP to tell `XXX` to do `ZZZ`."
+- "Use agent-remote-sync to tell `XXX` to do `ZZZ`."
 
 `XXX` should usually be a saved connection alias:
 
 ```powershell
-agentftp connect XXX 100.64.1.20
+agentremote connect XXX 100.64.1.20
 ```
 
-Aliases are normalized with a `::` prefix. `agentftp connect lab ...` creates
+Aliases are normalized with a `::` prefix. `agentremote connect lab ...` creates
 `::lab`; later commands may use either `lab` or `::lab`.
 
 The first authentication stores a session token for that slave runtime. Later
@@ -66,14 +66,14 @@ restarted, the token is invalid and the agent should reconnect.
 
 ## Relationship To agent-work-mem
 
-agentFTP is best understood as the multi-host extension of agent-work-mem:
+agent-remote-sync is best understood as the multi-host extension of agent-work-mem:
 
 - local side records outgoing `HANDOFF` or `STATUS_REPORT` AICP files,
 - remote side records incoming `HANDOFF_RECEIVED` files marked as external,
 - remote work can produce a report handoff,
 - the report is sent back and displayed/recorded on the original master.
 
-agentFTP must not rewrite or delete existing AIMemory entries. It appends
+agent-remote-sync must not rewrite or delete existing AIMemory entries. It appends
 namespaced AICP files and work.log events only.
 
 ## Host History
@@ -81,7 +81,7 @@ namespaced AICP files and work.log events only.
 Each saved host gets a project-local history file:
 
 ```text
-AIMemory/agentftp_hosts/lab.md
+AIMemory/agentremote_hosts/lab.md
 ```
 
 This file records:
@@ -98,7 +98,7 @@ the entire work log.
 A handoff is a portable task package:
 
 ```text
-.agentftp_handoff/
+.agentremote_handoff/
   manifest.json
   notes.md
   files/
@@ -129,23 +129,23 @@ report handoff and send it back.
 The minimal v1 primitive is an instruction inbox on the slave:
 
 ```powershell
-agentftp tell XXX "Run tests for /incoming/project and report failures." --path /incoming/project
-agentftp inbox
-agentftp inbox --read <instruction-id>
+agentremote tell XXX "Run tests for /incoming/project and report failures." --path /incoming/project
+agentremote inbox
+agentremote inbox --read <instruction-id>
 ```
 
 For file plus instruction, the agent can perform:
 
 ```powershell
-agentftp handoff XXX ./LLL "Use the uploaded file to do ZZZ and report back."
+agentremote handoff XXX ./LLL "Use the uploaded file to do ZZZ and report back."
 ```
 
-`agentftp handoff` is the preferred high-level command for user requests such as
+`agentremote handoff` is the preferred high-level command for user requests such as
 "send this file and tell the other agent what to do." Internally it performs a
 resumable `push`, records the remote path, then sends the AICP handoff with that
 path attached.
 
-The receiving side stores the manifest under `.agentftp_inbox`. A local agent on
+The receiving side stores the manifest under `.agentremote_inbox`. A local agent on
 that machine can read it, perform the task, and later send a report instruction
 or report package back.
 
@@ -154,8 +154,8 @@ or report package back.
 The receiver can claim and inspect work without opening the browser:
 
 ```powershell
-agentftp inbox --claim <instruction-id>
-agentftp worker --once
+agentremote inbox --claim <instruction-id>
+agentremote worker --once
 ```
 
 `worker --once` processes one `autoRun: true` instruction. By default it is a
@@ -163,17 +163,17 @@ dry run: it claims the instruction, records a worker plan in the inbox manifest,
 and prints related paths plus executable command candidates.
 
 Automatic command execution is intentionally narrow. The worker only executes
-lines explicitly prefixed with `agentftp-run:`:
+lines explicitly prefixed with `agentremote-run:`:
 
 ```text
 Please run the tests.
-agentftp-run: python -m unittest discover -s tests
+agentremote-run: python -m unittest discover -s tests
 ```
 
 Run with approval:
 
 ```powershell
-agentftp worker --once --execute ask
+agentremote worker --once --execute ask
 ```
 
 The approval prompt appears on the receiver/slave console. The master cannot
@@ -184,11 +184,11 @@ Run non-interactively only when the receiver already trusts the sender and the
 handoff:
 
 ```powershell
-agentftp worker --once --execute yes
+agentremote worker --once --execute yes
 ```
 
 For unattended workers, combine non-interactive execution with a narrow project
-root, scoped tokens, explicit `agentftp-run:` commands, and a trusted network or
+root, scoped tokens, explicit `agentremote-run:` commands, and a trusted network or
 TLS. If the underlying agent runtime has its own permission prompts, configure
 those prompts on the slave host before expecting automatic remote execution.
 
@@ -197,10 +197,10 @@ receiver send a report back automatically, the sender includes a callback alias
 that already exists on the receiver:
 
 ```powershell
-agentftp handoff worker ./LLL "Do ZZZ" --auto-run --callback-alias master
+agentremote handoff worker ./LLL "Do ZZZ" --auto-run --callback-alias master
 ```
 
-The callback alias stores only receiver-local connection data; agentFTP does not
+The callback alias stores only receiver-local connection data; agent-remote-sync does not
 send passwords or bearer tokens inside handoff manifests.
 
 ## Remote Execution Model
@@ -212,21 +212,21 @@ executing under its own already-running agent identity, not the master's model.
 
 ## Round Trip
 
-1. Master runs `agentftp handoff XXX ./LLL "Do ZZZ"` when files are needed.
-2. agentFTP pushes the file and sends a handoff referencing the remote path.
+1. Master runs `agentremote handoff XXX ./LLL "Do ZZZ"` when files are needed.
+2. agent-remote-sync pushes the file and sends a handoff referencing the remote path.
 3. Master AIMemory gets an outgoing AICP handoff.
 4. Slave AIMemory gets an external incoming AICP handoff and inbox manifest.
-5. Slave agent runs `agentftp worker --once --execute ask` or performs the task manually.
-6. Slave runs `agentftp report master <handoff-id> "<result>"`, or worker sends it through `--callback-alias`.
+5. Slave agent runs `agentremote worker --once --execute ask` or performs the task manually.
+6. Slave runs `agentremote report master <handoff-id> "<result>"`, or worker sends it through `--callback-alias`.
 7. Master receives an external STATUS_REPORT handoff and displays it through
-   `agentftp inbox` or future notification UI.
+   `agentremote inbox` or future notification UI.
 
 ## Safety
 
 Auto handoff execution is powerful. It needs explicit opt-in:
 
-- receiver starts with `agentftp handoff receive --auto`,
-- receiver claims/inspects the manifest with `agentftp worker --once`,
+- receiver starts with `agentremote handoff receive --auto`,
+- receiver claims/inspects the manifest with `agentremote worker --once`,
 - commands run inside the receiver-selected project root,
-- only explicit `agentftp-run:` command lines are executable,
+- only explicit `agentremote-run:` command lines are executable,
 - report includes commands run and files changed.

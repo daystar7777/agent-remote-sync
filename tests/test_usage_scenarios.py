@@ -16,56 +16,58 @@ from urllib.error import HTTPError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-import agentftp.master as master_module
-from agentftp.bootstrap import format_summary, run_bootstrap
-from agentftp.cleanup import cleanup_stale_partials
-from agentftp.cli import main as cli_main
-from agentftp.common import MAX_JSON_BODY, MAX_UPLOAD_CHUNK, AgentFTPError, partial_paths
-from agentftp.console import should_relaunch_in_console
-from agentftp.connections import get_connection, normalize_alias
-from agentftp.firewall import maybe_open_firewall, open_firewall_port
-from agentftp.headless import handoff, pull, push, report, tell
-from agentftp.inbox import create_instruction, list_instructions, read_instruction
-from agentftp.master import AgentFTPMasterServer, MasterState, RemoteClient
-from agentftp.security import SecurityConfig
-from agentftp.slave import AgentFTPSlaveServer, SlaveState
-from agentftp.state import TransferLogger, logs_dir
-from agentftp.sync import sync_plan_push, sync_pull, sync_push, write_plan
-from agentftp.tls import ensure_self_signed_cert, wrap_server_socket
-from agentftp.worker import run_worker_loop
-from agentftp.workmem import install_work_mem, is_installed, require_work_mem
+import agentremote.master as master_module
+from agentremote.bootstrap import format_summary, run_bootstrap
+from agentremote.cleanup import cleanup_stale_partials
+from agentremote.cli import main as cli_main
+from agentremote.common import MAX_JSON_BODY, MAX_UPLOAD_CHUNK, AgentRemoteError, console_print, partial_paths
+from agentremote.console import should_relaunch_in_console
+from agentremote.connections import get_connection, load_connections, normalize_alias, save_connections
+from agentremote.firewall import maybe_open_firewall, open_firewall_port
+from agentremote.handoff import create_handoff
+from agentremote.headless import handoff, pull, push, report, tell
+from agentremote.inbox import create_instruction, list_instructions, read_instruction
+from agentremote.master import AgentRemoteMasterServer, MasterState, RemoteClient, build_upload_plan
+from agentremote.security import SecurityConfig, SecurityState
+from agentremote.slave import AgentRemoteSlaveServer, SlaveState
+from agentremote.state import TransferLogger, logs_dir, prune_transfer_logs
+from agentremote.sync import sync_plan_push, sync_pull, sync_push, write_plan
+from agentremote.tls import ensure_self_signed_cert, wrap_server_socket
+from agentremote.worker import run_worker_loop
+from agentremote.worker_policy import allow_rule
+from agentremote.workmem import install_work_mem, is_installed, require_work_mem
 
 
 class UsageScenarioTests(unittest.TestCase):
-    def start_slave(self, root: Path, password: str = "secret") -> AgentFTPSlaveServer:
+    def start_slave(self, root: Path, password: str = "secret") -> AgentRemoteSlaveServer:
         state = SlaveState(root, password)
-        server = AgentFTPSlaveServer(("127.0.0.1", 0), state)
+        server = AgentRemoteSlaveServer(("127.0.0.1", 0), state)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server
 
     def start_tls_slave(
         self, root: Path, cert_store: Path, password: str = "secret"
-    ) -> tuple[AgentFTPSlaveServer, str]:
+    ) -> tuple[AgentRemoteSlaveServer, str]:
         state = SlaveState(root, password)
         tls_files = ensure_self_signed_cert(root, store_dir=cert_store)
-        server = AgentFTPSlaveServer(("127.0.0.1", 0), state)
+        server = AgentRemoteSlaveServer(("127.0.0.1", 0), state)
         wrap_server_socket(server, tls_files.cert_file, tls_files.key_file)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server, tls_files.fingerprint
 
     def start_slave_with_model(
         self, root: Path, model_id: str, password: str = "secret"
-    ) -> AgentFTPSlaveServer:
+    ) -> AgentRemoteSlaveServer:
         state = SlaveState(root, password, model_id=model_id)
-        server = AgentFTPSlaveServer(("127.0.0.1", 0), state)
+        server = AgentRemoteSlaveServer(("127.0.0.1", 0), state)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server
 
     def start_slave_with_security(
         self, root: Path, config: SecurityConfig, password: str = "secret"
-    ) -> AgentFTPSlaveServer:
+    ) -> AgentRemoteSlaveServer:
         state = SlaveState(root, password, security_config=config)
-        server = AgentFTPSlaveServer(("127.0.0.1", 0), state)
+        server = AgentRemoteSlaveServer(("127.0.0.1", 0), state)
         threading.Thread(target=server.serve_forever, daemon=True).start()
         return server
 
@@ -83,17 +85,17 @@ class UsageScenarioTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             (root / "visible.txt").write_text("visible", encoding="utf-8")
-            (root / ".agentftp").mkdir()
-            (root / ".agentftp_partial").mkdir()
-            (root / ".agentftp_inbox").mkdir()
+            (root / ".agentremote").mkdir()
+            (root / ".agentremote_partial").mkdir()
+            (root / ".agentremote_inbox").mkdir()
             slave = self.start_slave(root)
             try:
                 client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
                 names = {entry["name"] for entry in client.list("/")["entries"]}
                 self.assertIn("visible.txt", names)
-                self.assertNotIn(".agentftp", names)
-                self.assertNotIn(".agentftp_partial", names)
-                self.assertNotIn(".agentftp_inbox", names)
+                self.assertNotIn(".agentremote", names)
+                self.assertNotIn(".agentremote_partial", names)
+                self.assertNotIn(".agentremote_inbox", names)
             finally:
                 slave.shutdown()
                 slave.server_close()
@@ -108,10 +110,10 @@ class UsageScenarioTests(unittest.TestCase):
             remote.mkdir()
             install_work_mem(project)
             slave = self.start_slave(remote)
-            previous_home = os.environ.get("AGENTFTP_HOME")
+            previous_home = os.environ.get("AGENTREMOTE_HOME")
             previous_cwd = Path.cwd()
             try:
-                os.environ["AGENTFTP_HOME"] = str(config)
+                os.environ["AGENTREMOTE_HOME"] = str(config)
                 os.chdir(project)
                 out = io.StringIO()
                 with redirect_stdout(out):
@@ -138,9 +140,9 @@ class UsageScenarioTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
                 if previous_home is None:
-                    os.environ.pop("AGENTFTP_HOME", None)
+                    os.environ.pop("AGENTREMOTE_HOME", None)
                 else:
-                    os.environ["AGENTFTP_HOME"] = previous_home
+                    os.environ["AGENTREMOTE_HOME"] = previous_home
                 slave.shutdown()
                 slave.server_close()
 
@@ -157,7 +159,7 @@ class UsageScenarioTests(unittest.TestCase):
             master = None
             try:
                 client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
-                master = AgentFTPMasterServer(("127.0.0.1", 0), MasterState(local, client))
+                master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
                 threading.Thread(target=master.serve_forever, daemon=True).start()
                 base = f"http://127.0.0.1:{master.server_address[1]}"
                 job = request_json(
@@ -207,7 +209,7 @@ class UsageScenarioTests(unittest.TestCase):
                     alias="::lab",
                 )
                 self.assertEqual((remote / "incoming" / "KKK" / "a.txt").read_text(encoding="utf-8"), "alpha")
-                history = local / "AIMemory" / "agentftp_hosts" / "lab.md"
+                history = local / "AIMemory" / "agentremote_hosts" / "lab.md"
                 self.assertIn("PUSH", history.read_text(encoding="utf-8"))
             finally:
                 os.chdir(previous_cwd)
@@ -236,7 +238,7 @@ class UsageScenarioTests(unittest.TestCase):
                     alias="::lab",
                 )
                 self.assertEqual((local / "result" / "out.txt").read_text(encoding="utf-8"), "done")
-                history = local / "AIMemory" / "agentftp_hosts" / "lab.md"
+                history = local / "AIMemory" / "agentremote_hosts" / "lab.md"
                 self.assertIn("PULL", history.read_text(encoding="utf-8"))
             finally:
                 slave.shutdown()
@@ -257,7 +259,7 @@ class UsageScenarioTests(unittest.TestCase):
                 os.chdir(local)
                 push("127.0.0.1", slave.server_address[1], "secret", Path("file.txt"), "/")
                 (local / "file.txt").write_text("second", encoding="utf-8")
-                with self.assertRaises(AgentFTPError):
+                with self.assertRaises(AgentRemoteError):
                     push("127.0.0.1", slave.server_address[1], "secret", Path("file.txt"), "/")
                 push(
                     "127.0.0.1",
@@ -296,7 +298,7 @@ class UsageScenarioTests(unittest.TestCase):
                 self.assertTrue(instruction["handoffFile"])
                 self.assertEqual(len(list((local / "AIMemory").glob("handoff_*.md"))), 1)
                 self.assertEqual(len(list((remote / "AIMemory").glob("handoff_*.md"))), 1)
-                self.assertIn("HANDOFF_SENT", (local / "AIMemory" / "agentftp_hosts" / "lab.md").read_text(encoding="utf-8"))
+                self.assertIn("HANDOFF_SENT", (local / "AIMemory" / "agentremote_hosts" / "lab.md").read_text(encoding="utf-8"))
             finally:
                 slave.shutdown()
                 slave.server_close()
@@ -410,11 +412,11 @@ class UsageScenarioTests(unittest.TestCase):
             slave = self.start_slave(root)
             try:
                 client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
-                with self.assertRaises(AgentFTPError):
+                with self.assertRaises(AgentRemoteError):
                     client.list("/../outside")
-                with self.assertRaises(AgentFTPError):
-                    client.stat("/.agentftp_partial")
-                with self.assertRaises(AgentFTPError):
+                with self.assertRaises(AgentRemoteError):
+                    client.stat("/.agentremote_partial")
+                with self.assertRaises(AgentRemoteError):
                     client.mkdir({"bad": "path"})  # type: ignore[arg-type]
             finally:
                 slave.shutdown()
@@ -422,7 +424,7 @@ class UsageScenarioTests(unittest.TestCase):
 
     def test_s13_missing_work_mem_blocks_runtime_operations(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            with self.assertRaises(AgentFTPError):
+            with self.assertRaises(AgentRemoteError):
                 require_work_mem(Path(tmp), prompt_install=False)
 
     def test_s14_slave_model_is_recorded_for_remote_execution(self) -> None:
@@ -519,9 +521,42 @@ class UsageScenarioTests(unittest.TestCase):
                 slave.shutdown()
                 slave.server_close()
 
+    def test_s15b_authenticated_transfer_endpoints_use_bulk_rate_bucket(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            slave = self.start_slave_with_security(
+                root,
+                SecurityConfig(authenticated_per_minute=1, authenticated_transfer_per_minute=3),
+            )
+            try:
+                client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
+                client.stat("/")
+                with self.assertRaises(AgentRemoteError) as control_limit:
+                    client.stat("/")
+                self.assertEqual(control_limit.exception.code, "rate_limited")
+
+                for index in range(3):
+                    status = client.upload_status(f"/bulk-{index}.txt", 1)
+                    self.assertFalse(status["exists"])
+                with self.assertRaises(AgentRemoteError) as transfer_limit:
+                    client.upload_status("/bulk-over.txt", 1)
+                self.assertEqual(transfer_limit.exception.code, "rate_limited")
+            finally:
+                slave.shutdown()
+                slave.server_close()
+
+    def test_s15c_default_transfer_rate_supports_many_small_files(self) -> None:
+        state = SecurityState(SecurityConfig())
+        for _ in range(5000 * 3):
+            state.check_rate("127.0.0.1", authenticated=True, transfer=True)
+        self.assertGreaterEqual(
+            state.config.authenticated_transfer_per_minute,
+            5000 * 3,
+        )
+
     def test_s16_firewall_skip_and_bad_port_are_safe(self) -> None:
         maybe_open_firewall(7171, "no")
-        with self.assertRaises(AgentFTPError):
+        with self.assertRaises(AgentRemoteError):
             open_firewall_port(0)
 
     def test_s17_bootstrap_installs_work_mem_and_reports_checks(self) -> None:
@@ -537,7 +572,7 @@ class UsageScenarioTests(unittest.TestCase):
             self.assertTrue(is_installed(root))
             self.assertIn("agent-work-mem", summary.installed)
             text = format_summary(summary)
-            self.assertIn("agentFTP bootstrap", text)
+            self.assertIn("agent-remote-sync bootstrap", text)
             self.assertIn("python", text)
             self.assertIn("agent-work-mem", text)
             self.assertTrue(any(check.name == "git" for check in summary.checks))
@@ -608,6 +643,22 @@ class UsageScenarioTests(unittest.TestCase):
                 slave.shutdown()
                 slave.server_close()
 
+    def test_s18b_upload_plan_rejects_unicode_normalization_target_collision(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            project = root / "project"
+            project.mkdir()
+            composed = "cafe-é.txt"
+            decomposed = unicodedata.normalize("NFD", composed)
+            self.assertNotEqual(composed, decomposed)
+            (project / decomposed).write_text("nfd", encoding="utf-8")
+            (project / composed).write_text("nfc", encoding="utf-8")
+            if len(list(project.iterdir())) < 2:
+                self.skipTest("filesystem does not preserve distinct NFC/NFD test names")
+            with self.assertRaises(AgentRemoteError) as caught:
+                build_upload_plan(root, ["/project"], "/remote")
+            self.assertEqual(caught.exception.code, "filename_normalization_collision")
+
     def test_s19_handoff_command_pushes_file_and_sends_instruction(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -640,9 +691,45 @@ class UsageScenarioTests(unittest.TestCase):
                 self.assertIn("handoffId", instructions[0])
                 self.assertEqual(len(list((local / "AIMemory").glob("handoff_*.md"))), 1)
                 self.assertEqual(len(list((remote / "AIMemory").glob("handoff_*.md"))), 1)
-                history = (local / "AIMemory" / "agentftp_hosts" / "lab.md").read_text(encoding="utf-8")
+                history = (local / "AIMemory" / "agentremote_hosts" / "lab.md").read_text(encoding="utf-8")
                 self.assertIn("PUSH", history)
                 self.assertIn("HANDOFF_SENT", history)
+            finally:
+                os.chdir(previous_cwd)
+                slave.shutdown()
+                slave.server_close()
+
+    def test_s19b_handoff_cleanup_preserves_existing_remote_directory_contents(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "local"
+            remote = root / "remote"
+            local_project = local / "project"
+            existing_remote_project = remote / "incoming" / "project"
+            local_project.mkdir(parents=True)
+            existing_remote_project.mkdir(parents=True)
+            install_work_mem(local)
+            (local_project / "new.txt").write_text("new payload", encoding="utf-8")
+            (existing_remote_project / "keep.txt").write_text("do not delete", encoding="utf-8")
+            slave = self.start_slave(remote)
+            previous_cwd = Path.cwd()
+            try:
+                os.chdir(local)
+                with patch("agentremote.headless.tell", side_effect=AgentRemoteError(500, "tell_failed", "boom")):
+                    with self.assertRaises(AgentRemoteError):
+                        handoff(
+                            "127.0.0.1",
+                            slave.server_address[1],
+                            "secret",
+                            Path("project"),
+                            "This tell call will fail after upload.",
+                            remote_dir="/incoming",
+                        )
+                self.assertEqual(
+                    (existing_remote_project / "keep.txt").read_text(encoding="utf-8"),
+                    "do not delete",
+                )
+                self.assertFalse((existing_remote_project / "new.txt").exists())
             finally:
                 os.chdir(previous_cwd)
                 slave.shutdown()
@@ -662,12 +749,12 @@ class UsageScenarioTests(unittest.TestCase):
             slave, fingerprint = self.start_tls_slave(remote, cert_store)
             url = f"https://127.0.0.1:{slave.server_address[1]}"
             previous_cwd = Path.cwd()
-            previous_home = os.environ.get("AGENTFTP_HOME")
+            previous_home = os.environ.get("AGENTREMOTE_HOME")
             try:
-                with self.assertRaises(AgentFTPError):
+                with self.assertRaises(AgentRemoteError):
                     RemoteClient(url, slave.server_address[1], "secret")
                 os.chdir(local)
-                os.environ["AGENTFTP_HOME"] = str(config)
+                os.environ["AGENTREMOTE_HOME"] = str(config)
                 with redirect_stdout(io.StringIO()):
                     cli_main(
                         [
@@ -691,9 +778,9 @@ class UsageScenarioTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
                 if previous_home is None:
-                    os.environ.pop("AGENTFTP_HOME", None)
+                    os.environ.pop("AGENTREMOTE_HOME", None)
                 else:
-                    os.environ["AGENTFTP_HOME"] = previous_home
+                    os.environ["AGENTREMOTE_HOME"] = previous_home
                 slave.shutdown()
                 slave.server_close()
 
@@ -721,7 +808,7 @@ class UsageScenarioTests(unittest.TestCase):
                     cli_main(["inbox", "--root", str(remote), "--claim", instruction["id"]])
                 claimed = read_instruction(remote, instruction["id"])
                 self.assertEqual(claimed["state"], "claimed")
-                self.assertEqual(claimed["claimedBy"], "agentftp-worker")
+                self.assertEqual(claimed["claimedBy"], "agentremote-worker")
                 self.assertIn("HANDOFF_CLAIMED", (remote / "AIMemory" / "work.log").read_text(encoding="utf-8"))
             finally:
                 slave.shutdown()
@@ -742,7 +829,7 @@ class UsageScenarioTests(unittest.TestCase):
                     "127.0.0.1",
                     slave.server_address[1],
                     "secret",
-                    "Plan only.\nagentftp-run: python -c \"open('should_not_exist.txt','w').write('bad')\"",
+                    "Plan only.\nagentremote-run: python -c \"open('should_not_exist.txt','w').write('bad')\"",
                     local_root=local,
                     from_name="master-agent",
                     auto_run=True,
@@ -754,7 +841,7 @@ class UsageScenarioTests(unittest.TestCase):
                 self.assertEqual(claimed["state"], "claimed")
                 self.assertIn("workerPlan", claimed)
                 self.assertFalse((remote / "should_not_exist.txt").exists())
-                self.assertIn("agentftp-run", out.getvalue())
+                self.assertIn("agentremote-run", out.getvalue())
             finally:
                 slave.shutdown()
                 slave.server_close()
@@ -768,13 +855,14 @@ class UsageScenarioTests(unittest.TestCase):
             remote.mkdir()
             install_work_mem(local)
             install_work_mem(remote)
+            allow_rule(remote, "python-done-writer", "python", args_pattern="*done.txt*")
             slave = self.start_slave(remote)
             try:
                 instruction = tell(
                     "127.0.0.1",
                     slave.server_address[1],
                     "secret",
-                    "Create the worker output.\nagentftp-run: python -c \"from pathlib import Path; Path('done.txt').write_text('ok', encoding='utf-8')\"",
+                    "Create the worker output.\nagentremote-run: python -c \"from pathlib import Path; Path('done.txt').write_text('ok', encoding='utf-8')\"",
                     local_root=local,
                     from_name="master-agent",
                     auto_run=True,
@@ -801,12 +889,13 @@ class UsageScenarioTests(unittest.TestCase):
             worker_root.mkdir()
             install_work_mem(master_root)
             install_work_mem(worker_root)
+            allow_rule(worker_root, "python-callback-writer", "python", args_pattern="*callback_done.txt*")
             master_slave = self.start_slave(master_root)
             worker_slave = self.start_slave(worker_root)
-            previous_home = os.environ.get("AGENTFTP_HOME")
+            previous_home = os.environ.get("AGENTREMOTE_HOME")
             previous_cwd = Path.cwd()
             try:
-                os.environ["AGENTFTP_HOME"] = str(config)
+                os.environ["AGENTREMOTE_HOME"] = str(config)
                 os.chdir(worker_root)
                 with redirect_stdout(io.StringIO()):
                     cli_main(
@@ -824,7 +913,7 @@ class UsageScenarioTests(unittest.TestCase):
                     "127.0.0.1",
                     worker_slave.server_address[1],
                     "secret",
-                    "Run callback work.\nagentftp-run: python -c \"from pathlib import Path; Path('callback_done.txt').write_text('ok', encoding='utf-8')\"",
+                    "Run callback work.\nagentremote-run: python -c \"from pathlib import Path; Path('callback_done.txt').write_text('ok', encoding='utf-8')\"",
                     local_root=master_root,
                     from_name="master-agent",
                     auto_run=True,
@@ -842,9 +931,9 @@ class UsageScenarioTests(unittest.TestCase):
             finally:
                 os.chdir(previous_cwd)
                 if previous_home is None:
-                    os.environ.pop("AGENTFTP_HOME", None)
+                    os.environ.pop("AGENTREMOTE_HOME", None)
                 else:
-                    os.environ["AGENTFTP_HOME"] = previous_home
+                    os.environ["AGENTREMOTE_HOME"] = previous_home
                 master_slave.shutdown()
                 master_slave.server_close()
                 worker_slave.shutdown()
@@ -861,7 +950,7 @@ class UsageScenarioTests(unittest.TestCase):
             self.assertLessEqual(len(files), 2)
             session = json.loads(logger.session_path.read_text(encoding="utf-8"))
             self.assertEqual(session["id"], logger.session_id)
-            self.assertIn(".agentftp/logs/", session["log"])
+            self.assertIn(".agentremote/logs/", session["log"])
 
     def test_s26_headless_push_writes_session_log_and_memory_summary(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -890,9 +979,9 @@ class UsageScenarioTests(unittest.TestCase):
                 log_text = (local / session["log"]).read_text(encoding="utf-8")
                 self.assertIn("session_started", log_text)
                 self.assertIn("file_completed", log_text)
-                history = (local / "AIMemory" / "agentftp_hosts" / "lab.md").read_text(encoding="utf-8")
+                history = (local / "AIMemory" / "agentremote_hosts" / "lab.md").read_text(encoding="utf-8")
                 self.assertIn("session", history)
-                self.assertIn(".agentftp/logs/", history)
+                self.assertIn(".agentremote/logs/", history)
             finally:
                 os.chdir(previous_cwd)
                 slave.shutdown()
@@ -913,7 +1002,7 @@ class UsageScenarioTests(unittest.TestCase):
             previous_cwd = Path.cwd()
             try:
                 os.chdir(local)
-                with self.assertRaises(AgentFTPError) as caught:
+                with self.assertRaises(AgentRemoteError) as caught:
                     push(
                         "127.0.0.1",
                         slave.server_address[1],
@@ -989,9 +1078,9 @@ class UsageScenarioTests(unittest.TestCase):
                 self.assertEqual(result["session"]["status"], "completed")
                 self.assertTrue((local / result["session"]["sessionFile"]).exists())
                 self.assertTrue((local / result["plan"]["planFile"]).exists())
-                history = (local / "AIMemory" / "agentftp_hosts" / "lab.md").read_text(encoding="utf-8")
+                history = (local / "AIMemory" / "agentremote_hosts" / "lab.md").read_text(encoding="utf-8")
                 self.assertIn("SYNC_PUSH", history)
-                self.assertIn(".agentftp/plans/", history)
+                self.assertIn(".agentremote/plans/", history)
             finally:
                 slave.shutdown()
                 slave.server_close()
@@ -1010,7 +1099,7 @@ class UsageScenarioTests(unittest.TestCase):
             (remote_project / "changed.txt").write_text("old", encoding="utf-8")
             slave = self.start_slave(remote)
             try:
-                with self.assertRaises(AgentFTPError) as caught:
+                with self.assertRaises(AgentRemoteError) as caught:
                     with redirect_stdout(io.StringIO()):
                         sync_push(
                             "127.0.0.1",
@@ -1061,7 +1150,7 @@ class UsageScenarioTests(unittest.TestCase):
                 self.assertEqual((local / "checkout" / "result.txt").read_text(encoding="utf-8"), "done")
                 self.assertEqual(result["session"]["status"], "completed")
                 self.assertTrue((local / result["plan"]["planFile"]).exists())
-                history = (local / "AIMemory" / "agentftp_hosts" / "lab.md").read_text(encoding="utf-8")
+                history = (local / "AIMemory" / "agentremote_hosts" / "lab.md").read_text(encoding="utf-8")
                 self.assertIn("SYNC_PULL", history)
             finally:
                 slave.shutdown()
@@ -1077,7 +1166,7 @@ class UsageScenarioTests(unittest.TestCase):
             install_work_mem(local)
             slave = self.start_slave(remote)
             try:
-                with self.assertRaises(AgentFTPError) as caught:
+                with self.assertRaises(AgentRemoteError) as caught:
                     with redirect_stdout(io.StringIO()):
                         sync_pull(
                             "127.0.0.1",
@@ -1143,7 +1232,7 @@ class UsageScenarioTests(unittest.TestCase):
                 remote_storage = client.storage()
                 self.assertGreater(remote_storage["totalBytes"], 0)
                 self.assertGreaterEqual(remote_storage["freeBytes"], 0)
-                master = AgentFTPMasterServer(("127.0.0.1", 0), MasterState(local, client))
+                master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
                 threading.Thread(target=master.serve_forever, daemon=True).start()
                 base = f"http://127.0.0.1:{master.server_address[1]}"
                 local_storage = request_json(base, "GET", "/api/local/storage")
@@ -1153,6 +1242,47 @@ class UsageScenarioTests(unittest.TestCase):
                     self.assertGreaterEqual(payload["freeBytes"], 0)
                     self.assertLessEqual(payload["freeBytes"], payload["totalBytes"])
                     self.assertIn("path", payload)
+            finally:
+                if master:
+                    master.shutdown()
+                    master.server_close()
+                slave.shutdown()
+                slave.server_close()
+
+    def test_s34b_master_inbox_api_lists_and_reads_handoffs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "local"
+            remote = root / "remote"
+            local.mkdir()
+            remote.mkdir()
+            install_work_mem(local)
+            handoff_record = create_handoff(
+                local,
+                title="Inbox visible report",
+                task="Review this visible report.",
+                from_model="worker",
+                to_model="controller",
+                message_type="STATUS_REPORT",
+            )
+            slave = self.start_slave(remote)
+            master = None
+            try:
+                client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
+                master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
+                threading.Thread(target=master.serve_forever, daemon=True).start()
+                base = f"http://127.0.0.1:{master.server_address[1]}"
+                inbox = request_json(base, "GET", "/api/inbox")
+                self.assertTrue(any(item.get("filename") == handoff_record["filename"] for item in inbox["items"]))
+                read_get = request_json(base, "GET", "/api/inbox/read?filename=" + handoff_record["filename"])
+                self.assertIn("Inbox visible report", read_get["content"])
+                read_post = request_json(
+                    base,
+                    "POST",
+                    "/api/inbox/read",
+                    {"filename": "../" + handoff_record["filename"]},
+                )
+                self.assertIn("Review this visible report", read_post["content"])
             finally:
                 if master:
                     master.shutdown()
@@ -1178,7 +1308,7 @@ class UsageScenarioTests(unittest.TestCase):
                     "storage",
                     return_value={"path": str(remote), "totalBytes": 10, "usedBytes": 9, "freeBytes": 1, "freeRatio": 0.1},
                 ):
-                    with self.assertRaises(AgentFTPError) as caught:
+                    with self.assertRaises(AgentRemoteError) as caught:
                         with redirect_stdout(io.StringIO()):
                             push(
                                 "127.0.0.1",
@@ -1208,7 +1338,7 @@ class UsageScenarioTests(unittest.TestCase):
             master = None
             try:
                 client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
-                master = AgentFTPMasterServer(("127.0.0.1", 0), MasterState(local, client))
+                master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
                 threading.Thread(target=master.serve_forever, daemon=True).start()
                 base = f"http://127.0.0.1:{master.server_address[1]}"
                 with patch.object(
@@ -1244,10 +1374,10 @@ class UsageScenarioTests(unittest.TestCase):
             slave = self.start_slave(remote)
             try:
                 with patch(
-                    "agentftp.master.storage_info",
+                    "agentremote.master.storage_info",
                     return_value={"path": str(local), "totalBytes": 10, "usedBytes": 9, "freeBytes": 1, "freeRatio": 0.1},
                 ):
-                    with self.assertRaises(AgentFTPError) as caught:
+                    with self.assertRaises(AgentRemoteError) as caught:
                         with redirect_stdout(io.StringIO()):
                             pull(
                                 "127.0.0.1",
@@ -1276,11 +1406,11 @@ class UsageScenarioTests(unittest.TestCase):
             master = None
             try:
                 client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
-                master = AgentFTPMasterServer(("127.0.0.1", 0), MasterState(local, client))
+                master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
                 threading.Thread(target=master.serve_forever, daemon=True).start()
                 base = f"http://127.0.0.1:{master.server_address[1]}"
                 with patch(
-                    "agentftp.master.storage_info",
+                    "agentremote.master.storage_info",
                     return_value={"path": str(local), "totalBytes": 10, "usedBytes": 9, "freeBytes": 1, "freeRatio": 0.1},
                 ):
                     job = request_json(
@@ -1313,7 +1443,7 @@ class UsageScenarioTests(unittest.TestCase):
             master = None
             try:
                 client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
-                master = AgentFTPMasterServer(("127.0.0.1", 0), MasterState(local, client))
+                master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
                 threading.Thread(target=master.serve_forever, daemon=True).start()
                 base = f"http://127.0.0.1:{master.server_address[1]}"
                 plan = request_json(
@@ -1350,7 +1480,7 @@ class UsageScenarioTests(unittest.TestCase):
             master = None
             try:
                 client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
-                master = AgentFTPMasterServer(("127.0.0.1", 0), MasterState(local, client))
+                master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
                 threading.Thread(target=master.serve_forever, daemon=True).start()
                 base = f"http://127.0.0.1:{master.server_address[1]}"
                 plan = request_json(
@@ -1400,7 +1530,7 @@ class UsageScenarioTests(unittest.TestCase):
                         ]
                     )
                 self.assertEqual((received / "result.txt").read_text(encoding="utf-8"), "result")
-                self.assertTrue((project / ".agentftp" / "sessions").exists())
+                self.assertTrue((project / ".agentremote" / "sessions").exists())
                 self.assertFalse((received / "AIMemory").exists())
             finally:
                 os.chdir(previous_cwd)
@@ -1509,7 +1639,7 @@ class UsageScenarioTests(unittest.TestCase):
                 )
                 self.assertEqual(sorted(client.scopes), ["handoff", "read"])
                 self.assertEqual(client.list("/")["path"], "/")
-                with self.assertRaises(AgentFTPError) as caught:
+                with self.assertRaises(AgentRemoteError) as caught:
                     client.delete("/keep.txt")
                 self.assertEqual(caught.exception.code, "scope_denied")
                 self.assertTrue((root / "keep.txt").exists())
@@ -1554,7 +1684,7 @@ class UsageScenarioTests(unittest.TestCase):
     def test_s48_cleanup_removes_only_stale_partial_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            partial = root / ".agentftp_partial"
+            partial = root / ".agentremote_partial"
             partial.mkdir()
             old_part = partial / "old.part"
             old_meta = partial / "old.json"
@@ -1695,7 +1825,7 @@ class UsageScenarioTests(unittest.TestCase):
                     open_browser=True,
                 )
 
-            self.assertEqual(wait_labels, ["agentFTP master"])
+            self.assertEqual(wait_labels, ["agent-remote-sync master"])
             self.assertTrue(stopped.is_set())
 
     def test_s52_gui_remote_mkdir_and_upload_target_folder(self) -> None:
@@ -1708,7 +1838,7 @@ class UsageScenarioTests(unittest.TestCase):
             (local / "payload.txt").write_text("payload", encoding="utf-8")
             slave = self.start_slave(remote)
             client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
-            master = AgentFTPMasterServer(("127.0.0.1", 0), MasterState(local, client))
+            master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
             threading.Thread(target=master.serve_forever, daemon=True).start()
             base = f"http://127.0.0.1:{master.server_address[1]}"
             try:
@@ -1759,7 +1889,7 @@ class UsageScenarioTests(unittest.TestCase):
             (remote / "rbox").mkdir()
             slave = self.start_slave(remote)
             client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
-            master = AgentFTPMasterServer(("127.0.0.1", 0), MasterState(local, client))
+            master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
             threading.Thread(target=master.serve_forever, daemon=True).start()
             base = f"http://127.0.0.1:{master.server_address[1]}"
             try:
@@ -1854,6 +1984,75 @@ class UsageScenarioTests(unittest.TestCase):
                 slave.shutdown()
                 slave.server_close()
 
+    def test_s54b_headless_push_recovers_corrupt_remote_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "local"
+            remote = root / "remote"
+            local.mkdir()
+            remote.mkdir()
+            data = b"clean upload payload" * 128
+            (local / "stale.bin").write_bytes(data)
+            upload_part, upload_meta = partial_paths(remote, "/resume/stale.bin")
+            upload_part.write_bytes(b"x" * len(data))
+            upload_meta.write_text(json.dumps({"path": "/resume/stale.bin", "size": len(data)}), encoding="utf-8")
+            slave = self.start_slave(remote)
+            try:
+                with redirect_stdout(io.StringIO()):
+                    push(
+                        "127.0.0.1",
+                        slave.server_address[1],
+                        "secret",
+                        local / "stale.bin",
+                        "/resume",
+                        local_root=local,
+                        overwrite=True,
+                    )
+                self.assertEqual((remote / "resume" / "stale.bin").read_bytes(), data)
+                self.assertFalse(upload_part.exists())
+                self.assertFalse(upload_meta.exists())
+            finally:
+                slave.shutdown()
+                slave.server_close()
+
+    def test_s54c_master_upload_job_recovers_corrupt_remote_partial(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "local"
+            remote = root / "remote"
+            local.mkdir()
+            remote.mkdir()
+            data = b"gui upload payload" * 128
+            (local / "gui.bin").write_bytes(data)
+            upload_part, upload_meta = partial_paths(remote, "/incoming/gui.bin")
+            upload_part.write_bytes(b"y" * len(data))
+            upload_meta.write_text(json.dumps({"path": "/incoming/gui.bin", "size": len(data)}), encoding="utf-8")
+            slave = self.start_slave(remote)
+            master = None
+            try:
+                client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
+                master = AgentRemoteMasterServer(("127.0.0.1", 0), MasterState(local, client))
+                threading.Thread(target=master.serve_forever, daemon=True).start()
+                base = f"http://127.0.0.1:{master.server_address[1]}"
+                job = request_json(
+                    base,
+                    "POST",
+                    "/api/jobs/upload",
+                    {"paths": ["/gui.bin"], "remoteDir": "/incoming", "overwrite": True},
+                )
+                result = wait_job(base, job["id"])
+                self.assertEqual(result["state"], "done")
+                self.assertEqual((remote / "incoming" / "gui.bin").read_bytes(), data)
+                self.assertLessEqual(result["doneBytes"], result["totalBytes"])
+                self.assertFalse(upload_part.exists())
+                self.assertFalse(upload_meta.exists())
+            finally:
+                if master:
+                    master.shutdown()
+                    master.server_close()
+                slave.shutdown()
+                slave.server_close()
+
     def test_s55_cli_alias_push_pull_and_tell_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1916,7 +2115,7 @@ class UsageScenarioTests(unittest.TestCase):
                 slave.server_close()
 
     def test_s56_gui_has_persistent_transfer_controls_and_queue_monitor(self) -> None:
-        html = (Path(__file__).resolve().parents[1] / "src" / "agentftp" / "web" / "index.html").read_text(
+        html = (Path(__file__).resolve().parents[1] / "src" / "agentremote" / "web" / "index.html").read_text(
             encoding="utf-8"
         )
         self.assertIn('class="transfer-actions"', html)
@@ -1925,8 +2124,46 @@ class UsageScenarioTests(unittest.TestCase):
         self.assertIn('id="transfer-monitor"', html)
         self.assertIn('id="transfer-queue"', html)
         self.assertIn("function renderTransferMonitor", html)
-        self.assertIn("Cannot reach the local agentFTP GUI server", html)
+        self.assertIn("Cannot reach the local agent-remote-sync GUI server", html)
         self.assertNotIn('class="bridge"', html)
+
+    def test_s57_console_print_replaces_unencodable_filename_chars(self) -> None:
+        raw = io.BytesIO()
+        stream = io.TextIOWrapper(raw, encoding="cp949", errors="strict")
+        console_print("upload /accent-e\u0301.txt -> /accent-e\u0301.txt", file=stream)
+        stream.flush()
+        self.assertIn(b"upload /accent-e?.txt -> /accent-e?.txt", raw.getvalue())
+
+    def test_s58_prune_transfer_logs_negative_keep_preserves_all(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            log_dir = logs_dir(root)
+            for index in range(3):
+                (log_dir / f"transfer-test-{index}.jsonl").write_text(
+                    json.dumps({"index": index}) + "\n",
+                    encoding="utf-8",
+                )
+            prune_transfer_logs(log_dir, keep=-1)
+            self.assertEqual(len(list(log_dir.glob("transfer-*.jsonl"))), 3)
+
+    def test_s59_save_connections_uses_unique_temp_file_without_leftovers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "config"
+            with patch("agentremote.connections.config_home", return_value=config):
+                save_connections(
+                    {
+                        "connections": {
+                            "::lab": {
+                                "name": "::lab",
+                                "host": "127.0.0.1",
+                                "port": 7171,
+                                "token": "token",
+                            }
+                        }
+                    }
+                )
+                self.assertEqual(load_connections()["connections"]["::lab"]["host"], "127.0.0.1")
+                self.assertEqual(list(config.glob("connections.json.*.tmp")), [])
 
 
 def request_json(base: str, method: str, path: str, payload: dict | None = None) -> dict:

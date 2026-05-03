@@ -4,7 +4,7 @@ Windows, macOS, and Linux can represent the same visible filename with different
 Unicode byte sequences. This is especially painful for Korean and accented
 characters when files move between Windows and macOS.
 
-agentFTP treats filenames as Unicode text and normalizes protocol paths to NFC.
+agent-remote-sync treats filenames as Unicode text and normalizes protocol paths to NFC.
 
 ## Policy
 
@@ -24,9 +24,9 @@ with the composed NFC name.
 The default disk write form is NFC. It can be overridden for special cases:
 
 ```powershell
-$env:AGENTFTP_FILENAME_NORMALIZATION = "NFC"
-$env:AGENTFTP_FILENAME_NORMALIZATION = "NFD"
-$env:AGENTFTP_FILENAME_NORMALIZATION = "preserve"
+$env:AGENTREMOTE_FILENAME_NORMALIZATION = "NFC"
+$env:AGENTREMOTE_FILENAME_NORMALIZATION = "NFD"
+$env:AGENTREMOTE_FILENAME_NORMALIZATION = "preserve"
 ```
 
 `NFC` is recommended for cross-platform projects. `preserve` should only be used
@@ -35,12 +35,12 @@ when a project has a strong reason to keep exact incoming normalization.
 ## Ambiguous Names
 
 If a directory contains two names that differ only by Unicode normalization,
-agentFTP rejects the lookup as ambiguous. This prevents accidentally reading,
+agent-remote-sync rejects the lookup as ambiguous. This prevents accidentally reading,
 overwriting, or deleting the wrong file.
 
 ## Limits
 
-- agentFTP does not repair existing local folders in place.
+- agent-remote-sync does not repair existing local folders in place.
 - It does not solve case-sensitivity differences between filesystems.
 - It does not transliterate filenames; it preserves characters and normalizes
   Unicode representation only.
