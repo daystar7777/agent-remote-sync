@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import platform
+import shutil
 import shlex
 import signal
 import subprocess
@@ -318,7 +319,8 @@ def main(argv: list[str] | None = None) -> None:
         help="remove partial files older than this many hours",
     )
 
-    subcommands.add_parser("doctor", help="check local runtime")
+    doctor_parser = subcommands.add_parser("doctor", help="diagnose install path, checkout, and registered processes")
+    doctor_parser.add_argument("--root", default=".", help="project root")
 
     # --- New swarm/daemon/controller scaffold (Phase 0) ---
 
@@ -475,7 +477,9 @@ def main(argv: list[str] | None = None) -> None:
     calls_show.add_argument("call_id", help="call ID to show")
     calls_parser.add_parser("refresh", help="reconcile call records from inbox/AIMemory reports")
 
-    processes_parser = subcommands.add_parser("processes", help="swarm process management").add_subparsers(dest="processes_command", required=True)
+    processes_root = subcommands.add_parser("processes", help="swarm process management")
+    processes_root.add_argument("--root", default=".", help="project root")
+    processes_parser = processes_root.add_subparsers(dest="processes_command", required=False)
     processes_list_parser = processes_parser.add_parser("list", help="list registered local processes")
     processes_list_parser.add_argument("--root", default=".", help="project root")
     processes_forget = processes_parser.add_parser("forget", help="remove a process from the registry")
@@ -484,6 +488,8 @@ def main(argv: list[str] | None = None) -> None:
     processes_stop = processes_parser.add_parser("stop", help="stop a registered process")
     processes_stop.add_argument("id", help="process registry id")
     processes_stop.add_argument("--root", default=".", help="project root")
+    processes_stop_gui = processes_parser.add_parser("stop-gui", help="stop registered master/controller GUI processes")
+    processes_stop_gui.add_argument("--root", default=".", help="project root")
 
     approvals_parser = subcommands.add_parser("approvals", help="approval request management").add_subparsers(dest="approvals_command", required=True)
     approvals_list_parser = approvals_parser.add_parser("list", help="list approval requests")
@@ -589,6 +595,25 @@ def main(argv: list[str] | None = None) -> None:
     sync_project.add_argument("--yes", action="store_true", help="execute sync without plan confirmation")
     sync_project.add_argument("--dry-run", action="store_true", help="show plan only, do not execute")
     sync_project.add_argument("--include-memory", action="store_true", help="include AIMemory in sync")
+    sync_project.add_argument(
+        "--all-files",
+        "--no-default-excludes",
+        dest="all_files",
+        action="store_true",
+        help="disable sync-project default/profile excludes and only apply explicit --exclude rules",
+    )
+    sync_project.add_argument(
+        "--include-volatile-memory",
+        action="store_true",
+        help="include local AIMemory connection/topology runtime files that are normally excluded",
+    )
+    sync_project.add_argument(
+        "--profile",
+        action="append",
+        choices=sorted(SYNC_PROJECT_PROFILES),
+        default=[],
+        help="exclude profile to apply; default is standard; can be repeated",
+    )
     sync_project.add_argument("--exclude", action="append", default=[], help="additional exclude pattern")
     sync_project.add_argument("--port", type=int, default=None, help="node port")
     sync_project.add_argument("--password", help="node password")
@@ -605,6 +630,8 @@ def main(argv: list[str] | None = None) -> None:
     uninstall_parser.add_argument("--root", default=".", help="project root")
     uninstall_parser.add_argument("--project-state", action="store_true", help="show project-local .agentremote state cleanup plan")
     uninstall_parser.add_argument("--purge-memory", action="store_true", help="show AIMemory purge plan (use with caution)")
+    stop_gui_parser = subcommands.add_parser("stop-gui", help="stop registered master/controller GUI processes")
+    stop_gui_parser.add_argument("--root", default=".", help="project root")
     approvals_wait = approvals_parser.add_parser("wait", help="wait for an approval decision")
     approvals_wait.add_argument("id", help="approval id")
     approvals_wait.add_argument("--root", default=".", help="project root")
@@ -637,7 +664,7 @@ def main(argv: list[str] | None = None) -> None:
             return
     try:
         if args.command == "doctor":
-            doctor()
+            doctor(Path(args.root))
         elif args.command == "cleanup":
             print_json(cleanup_stale_partials(Path(args.root), older_than_hours=args.older_than_hours))
         elif args.command == "bootstrap":
@@ -654,7 +681,7 @@ def main(argv: list[str] | None = None) -> None:
             pass
         elif args.command in ("nodes", "topology", "policy", "route"):
             pass
-        elif args.command == "processes":
+        elif args.command in ("processes", "doctor", "stop-gui"):
             pass
         elif args.command in ("setup", "map", "status", "uninstall"):
             pass
@@ -1418,21 +1445,9 @@ def main(argv: list[str] | None = None) -> None:
                 else:
                     print("No call records were updated")
         elif args.command == "processes":
-            if args.processes_command == "list":
+            if args.processes_command in (None, "list"):
                 root = Path(args.root).resolve()
-                procs = list_process_registry(root)
-                if not procs:
-                    print("No registered processes.")
-                else:
-                    for p in procs:
-                        role = p.get("role", "?")
-                        pid = p.get("pid", "?")
-                        status = p.get("status", "?")
-                        host = p.get("host", "")
-                        port = p.get("port", "")
-                        addr = f"{host}:{port}" if host and port else ""
-                        ui = p.get("uiUrl", "")
-                        print(f"{p['id']} {role} pid={pid} {status} {addr} {ui}")
+                print_process_registry(root)
             elif args.processes_command == "forget":
                 root = Path(args.root).resolve()
                 ok = forget_process(root, args.id)
@@ -1455,6 +1470,10 @@ def main(argv: list[str] | None = None) -> None:
                     print(f"stopped: {args.id}")
                 except Exception as exc:
                     print(f"cannot stop: {exc}")
+            elif args.processes_command == "stop-gui":
+                stop_registered_gui_processes(Path(args.root).resolve())
+        elif args.command == "stop-gui":
+            stop_registered_gui_processes(Path(args.root).resolve())
         elif args.command == "approvals":
             from .approval import (
                 decide_approval,
@@ -1570,17 +1589,23 @@ def main(argv: list[str] | None = None) -> None:
             local_path = Path(args.local).resolve() if args.local else Path.cwd()
             remote = RemoteClient(target.host, target.port, target.password, token=target.token, tls_fingerprint=target.tls_fingerprint, tls_insecure=target.tls_insecure, ca_file=target.ca_file)
             excludes = sync_project_excludes(args)
+            profiles = sync_project_profiles(args)
             plan = sync_plan_push(local_path, local_path, args.remote_dir, remote, exclude_patterns=excludes)
             write_plan(local_path, plan)
             transfer_bytes = sync_project_transfer_bytes(plan, overwrite=args.overwrite)
             print(f"Sync plan: {local_path.name} -> {args.remote_dir}")
-            print(f"Files: {plan['summary']['copyFiles']} copy, {plan['summary'].get('skipped', 0)} skipped")
+            print(f"Profiles: {', '.join(profiles)}")
+            if args.all_files:
+                print("WARNING: default generated-folder, volatile-memory, and secret-pattern excludes are disabled.")
+                print("         Only explicit --exclude rules and protocol-reserved state protection apply.")
+            print(
+                "Files: "
+                f"{plan['summary']['copyFiles']} copy, "
+                f"{len(plan.get('conflicts', []))} changed/conflict, "
+                f"{plan['summary'].get('skipped', 0)} skipped"
+            )
             print(f"Total: {format_bytes(transfer_bytes)}")
-            print(f"Conflicts: {len(plan.get('conflicts', []))}")
-            if excludes:
-                print(f"Excludes: {', '.join(sorted(excludes)[:10])}{'...' if len(excludes) > 10 else ''}")
-            if plan.get("excluded"):
-                print(f"Excluded paths: {len(plan['excluded'])}")
+            print_sync_project_plan_details(plan, excludes)
             remote_storage = sync_project_remote_storage(remote)
             if remote_storage:
                 print(f"Remote free: {format_bytes(int(remote_storage.get('freeBytes', 0) or 0))}")
@@ -1901,15 +1926,36 @@ def should_offer_tls_trust(host: str, tls_kwargs: dict, exc: AgentRemoteError) -
     text = (exc.message or "").lower()
     return "certificate_verify_failed" in text or "certificate verify failed" in text
 
-def doctor() -> None:
+def doctor(root: Path | None = None) -> None:
+    root = (root or Path.cwd()).resolve()
+    package_file = Path(__file__).resolve()
+    package_root = detect_checkout_root(package_file) or package_file.parent
+    current_checkout = detect_checkout_root(root)
+    command_path = shutil.which("agentremote") or ""
     print(f"agent-remote-sync {__version__}")
     print(f"Python {platform.python_version()}")
     print(f"Platform {platform.platform()}")
-    print(f"Executable {sys.executable}")
-    if is_installed(Path.cwd()):
-        print(f"agent-work-mem OK: {Path.cwd().resolve() / 'AIMemory'}")
+    print(f"Python executable: {sys.executable}")
+    print(f"agentremote command: {command_path or 'not found on PATH'}")
+    print(f"Imported package: {package_file}")
+    print(f"Imported checkout: {package_root}")
+    print(f"Project root: {root}")
+    if current_checkout:
+        print(f"Current checkout: {current_checkout}")
+        if current_checkout != package_root:
+            print("WARNING: current checkout differs from the imported agentremote package.")
+            print("         Reinstall with `python -m pip install -e .` from the checkout you want to run.")
+    if is_installed(root):
+        print(f"agent-work-mem OK: {root / 'AIMemory'}")
     else:
         print("agent-work-mem MISSING in current project")
+    process_counts = process_state_counts(list_process_registry(root))
+    print(
+        "Registered processes: "
+        f"{process_counts.get('running', 0)} running, "
+        f"{process_counts.get('stale', 0)} stale, "
+        f"{process_counts.get('stopped', 0)} stopped"
+    )
     try:
         import cryptography
 
@@ -1917,6 +1963,14 @@ def doctor() -> None:
     except ImportError:
         print("TLS self-signed support MISSING: install cryptography")
     print("Runtime OK")
+
+
+def detect_checkout_root(start: Path) -> Path | None:
+    current = start if start.is_dir() else start.parent
+    for path in [current, *current.parents]:
+        if (path / "pyproject.toml").exists() and (path / "src" / "agentremote").exists():
+            return path.resolve()
+    return None
 
 
 def password_arg(value: str | None) -> str:
@@ -2412,6 +2466,55 @@ def process_state_counts(processes: list[dict]) -> dict[str, int]:
     return counts
 
 
+def print_process_registry(root: Path) -> None:
+    procs = list_process_registry(root)
+    if not procs:
+        print("No registered processes.")
+        return
+    counts = process_state_counts(procs)
+    print(
+        f"Processes for {root}: "
+        f"{counts.get('running', 0)} running, {counts.get('stale', 0)} stale, {counts.get('stopped', 0)} stopped"
+    )
+    for p in procs:
+        role = p.get("role", "?")
+        pid = p.get("pid", "?")
+        status = p.get("status", "?")
+        host = p.get("host", "")
+        port = p.get("port", "")
+        addr = f"{host}:{port}" if host and port else ""
+        ui = p.get("uiUrl", "")
+        print(f"{p['id']} {role} pid={pid} {status} {addr} {ui}")
+
+
+def stop_registered_gui_processes(root: Path) -> None:
+    stopped = 0
+    candidates = [
+        proc for proc in list_process_registry(root)
+        if proc.get("role") in ("master", "controller-gui") and proc.get("status") == "running"
+    ]
+    if not candidates:
+        print("No running registered GUI processes.")
+        return
+    for proc in candidates:
+        pid = process_pid(proc)
+        proc_id = str(proc.get("id", ""))
+        if not process_stop_metadata_valid(root, proc):
+            print(f"PID mismatch; refusing to stop {proc_id}")
+            continue
+        if not process_is_running(pid):
+            print(f"process is not running: {proc_id}")
+            continue
+        try:
+            os.kill(pid, signal.SIGTERM)
+            print(f"stopped: {proc_id}")
+            stopped += 1
+        except Exception as exc:
+            print(f"cannot stop {proc_id}: {exc}")
+    if stopped == 0:
+        print("No GUI process was stopped.")
+
+
 def node_status_counts(state: dict) -> dict[str, int]:
     counts = {"online": 0, "offline": 0, "unknown": 0}
     nodes = topology_nodes(state)
@@ -2424,19 +2527,80 @@ def node_status_counts(state: dict) -> dict[str, int]:
     return counts
 
 
-DEFAULT_SYNC_EXCLUDES = {
-    ".git/", ".venv/", "venv/", "node_modules/",
-    "__pycache__/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/",
-    "dist/", "build/",
-    ".agentremote/", ".agentremote_partial/", ".agentremote_handoff/", ".agentremote_inbox/",
+CORE_SYNC_EXCLUDES = {
+    ".git/",
+    ".agentremote/",
+    ".agentremote_partial/",
+    ".agentremote_handoff/",
+    ".agentremote_inbox/",
+    ".claude/",
+    ".codex/",
+    ".opencode/",
+    ".env",
+    ".env.*",
+    "*.pem",
+    "*.key",
+    "*.p12",
+    "*.pfx",
+    "*.crt",
 }
 
+VOLATILE_MEMORY_EXCLUDES = {
+    "AIMemory/agentremote_hosts/",
+    "AIMemory/swarm/calls/",
+    "AIMemory/swarm/events/",
+    "AIMemory/swarm/nodes/",
+    "AIMemory/swarm/routes.md",
+}
+
+SYNC_PROJECT_PROFILES: dict[str, set[str]] = {
+    "standard": {
+        ".venv/",
+        "venv/",
+        "node_modules/",
+        "__pycache__/",
+        ".pytest_cache/",
+        ".mypy_cache/",
+        ".ruff_cache/",
+        "dist/",
+        "build/",
+        "logs/",
+        "Logs/",
+        "Library/",
+        "Temp/",
+        "Obj/",
+        "UserSettings/",
+    },
+    "unity": {"Library/", "Logs/", "UserSettings/", "Temp/", "Obj/", "Build/", "Builds/"},
+    "python": {"__pycache__/", ".pytest_cache/", ".mypy_cache/", ".ruff_cache/", ".tox/", ".nox/", ".venv/", "venv/", "dist/", "build/", "*.egg-info/"},
+    "node": {"node_modules/", ".next/", ".nuxt/", ".svelte-kit/", "coverage/", "dist/", "build/"},
+    "llm": {"models/", "model/", "tts/", "audio_out/", "outputs/", "checkpoints/", "*.safetensors", "*.ckpt", "*.gguf"},
+}
+SYNC_PROJECT_PROFILES["unity-python-llm"] = (
+    SYNC_PROJECT_PROFILES["unity"] | SYNC_PROJECT_PROFILES["python"] | SYNC_PROJECT_PROFILES["node"] | SYNC_PROJECT_PROFILES["llm"]
+)
+DEFAULT_SYNC_EXCLUDES = CORE_SYNC_EXCLUDES | SYNC_PROJECT_PROFILES["standard"] | VOLATILE_MEMORY_EXCLUDES
+
+
+def sync_project_profiles(args: argparse.Namespace) -> list[str]:
+    if getattr(args, "all_files", False):
+        return ["all-files"]
+    profiles = list(getattr(args, "profile", None) or [])
+    return profiles or ["standard"]
+
+
 def sync_project_excludes(args: argparse.Namespace) -> set[str]:
-    excludes = DEFAULT_SYNC_EXCLUDES.copy()
+    explicit_excludes = set(getattr(args, "exclude", None) or [])
+    if getattr(args, "all_files", False):
+        return explicit_excludes
+    excludes = CORE_SYNC_EXCLUDES.copy()
+    for profile in sync_project_profiles(args):
+        excludes.update(SYNC_PROJECT_PROFILES.get(profile, set()))
     if not getattr(args, "include_memory", False):
         excludes.add("AIMemory/")
-    for pattern in (getattr(args, "exclude", None) or []):
-        excludes.add(pattern)
+    elif not getattr(args, "include_volatile_memory", False):
+        excludes.update(VOLATILE_MEMORY_EXCLUDES)
+    excludes.update(explicit_excludes)
     return excludes
 
 
@@ -2453,6 +2617,46 @@ def sync_project_remote_storage(remote: RemoteClient) -> dict | None:
     except Exception:
         return None
     return storage if isinstance(storage, dict) else None
+
+
+def sync_project_exclusion_summary(plan: dict, *, limit: int = 8) -> list[str]:
+    by_pattern: dict[str, dict[str, object]] = {}
+    for item in plan.get("excluded", []) or []:
+        pattern = str(item.get("pattern", "") or "?")
+        bucket = by_pattern.setdefault(pattern, {"count": 0, "sample": ""})
+        bucket["count"] = int(bucket["count"]) + 1
+        if not bucket["sample"]:
+            bucket["sample"] = str(item.get("rel", "") or "")
+    rows = sorted(
+        by_pattern.items(),
+        key=lambda pair: (-int(pair[1]["count"]), str(pair[0])),
+    )
+    return [
+        f"{pattern}: {data['count']} path(s)" + (f" e.g. {data['sample']}" if data.get("sample") else "")
+        for pattern, data in rows[:limit]
+    ]
+
+
+def print_sync_project_plan_details(plan: dict, excludes: set[str], *, limit: int = 6) -> None:
+    summary = plan.get("summary", {})
+    create_dirs = int(summary.get("createDirs", 0) or 0)
+    excluded_count = int(summary.get("excluded", len(plan.get("excluded", []) or [])) or 0)
+    print(f"Dirs: {create_dirs} create")
+    print(f"Excluded: {excluded_count} path(s), {len(excludes)} rule(s)")
+    for line in sync_project_exclusion_summary(plan, limit=limit):
+        print(f"  - {line}")
+    conflicts = list(plan.get("conflicts", []) or [])
+    if conflicts:
+        print("Conflict samples:")
+        for item in conflicts[:limit]:
+            size = format_bytes(int(item.get("size", 0) or 0))
+            print(f"  - {item.get('rel', '')}: {item.get('reason', 'changed')} ({size})")
+    copies = list(plan.get("copy", []) or [])
+    if copies:
+        print("Upload samples:")
+        for item in copies[:limit]:
+            size = format_bytes(int(item.get("size", 0) or 0))
+            print(f"  - {item.get('rel', '')}: {item.get('reason', 'missing')} ({size})")
 
 
 def resolve_handoff_cli_args(args: argparse.Namespace) -> tuple[str, str]:

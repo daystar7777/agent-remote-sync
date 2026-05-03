@@ -51,6 +51,7 @@ from .tls import TLSFiles, certificate_fingerprint, ensure_self_signed_cert, for
 
 SESSION_SCOPES = {"read", "write", "delete", "handoff"}
 DEFAULT_SESSION_SCOPES = sorted(SESSION_SCOPES)
+EMPTY_FILE_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 
 class SlaveState:
@@ -559,6 +560,22 @@ class SlaveHandler(BaseHTTPRequestHandler):
                 if not expected_hash or sha256_file(target) == expected_hash:
                     send_json(self, 200, {"ok": True, "entry": file_info(self.server.state.root, target)})
                     return
+            if size == 0:
+                if expected_hash and expected_hash != EMPTY_FILE_SHA256:
+                    raise AgentRemoteError(400, "hash_mismatch", "Uploaded file hash did not match")
+                if target.exists() and target.is_dir():
+                    raise AgentRemoteError(409, "exists", "Target exists and overwrite was not confirmed")
+                if target.exists() and not overwrite:
+                    raise AgentRemoteError(409, "exists", "Target exists and overwrite was not confirmed")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(b"")
+                if meta.exists():
+                    meta.unlink()
+                if isinstance(mtime, (int, float)):
+                    os.utime(target, (float(mtime), float(mtime)))
+                self.server.state.log(f"upload finish {path_text}")
+                send_json(self, 200, {"ok": True, "entry": file_info(self.server.state.root, target)})
+                return
             raise AgentRemoteError(400, "missing_partial", "No partial upload exists")
         if part.stat().st_size != size:
             discard_upload_partial(part, meta)
@@ -659,7 +676,7 @@ def run_slave(
     model_id: str = "agentremote-slave",
     firewall: str = "ask",
     max_concurrent: int = 32,
-    authenticated_transfer_per_minute: int = 30000,
+    authenticated_transfer_per_minute: int = SecurityConfig().authenticated_transfer_per_minute,
     panic_on_flood: bool = False,
     tls: str = "off",
     cert_file: Path | None = None,

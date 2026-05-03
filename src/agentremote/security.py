@@ -14,7 +14,7 @@ class SecurityConfig:
     max_concurrent_requests: int = 32
     unauthenticated_per_minute: int = 60
     authenticated_per_minute: int = 600
-    authenticated_transfer_per_minute: int = 30000
+    authenticated_transfer_per_minute: int = 120000
     login_failures_per_minute: int = 8
     login_block_seconds: int = 120
     overload_events_per_minute: int = 120

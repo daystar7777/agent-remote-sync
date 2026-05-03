@@ -148,7 +148,10 @@ class RemoteClient:
         return json.loads(raw.decode("utf-8"))
 
     def read_with_retries(self, request: Request, *, timeout: int, retryable: bool) -> bytes:
+        rate_limit_retryable = retryable and self.max_retries > 0 and is_transfer_request_url(request.full_url)
         attempts = self.max_retries + 1 if retryable else 1
+        if rate_limit_retryable:
+            attempts = max(attempts, 12)
         last: Exception | None = None
         for attempt in range(attempts):
             try:
@@ -161,7 +164,12 @@ class RemoteClient:
                 ) as response:
                     return response.read()
             except HTTPError as exc:
-                raise remote_http_error(exc) from exc
+                error = remote_http_error(exc)
+                last = error
+                if rate_limit_retryable and exc.code == 429 and attempt + 1 < attempts:
+                    time.sleep(rate_limit_retry_delay(exc, attempt))
+                    continue
+                raise error from exc
             except (URLError, TimeoutError, socket.timeout, ssl.SSLError) as exc:
                 last = exc
                 if attempt + 1 >= attempts:
@@ -209,7 +217,7 @@ class RemoteClient:
         return self.request_json("GET", "/api/storage")
 
     def mkdir(self, path: str) -> None:
-        self.request_json("POST", "/api/mkdir", {"path": path})
+        self.request_json("POST", "/api/mkdir", {"path": path}, retryable=True)
 
     def delete(self, path: str) -> None:
         self.request_json("POST", "/api/delete", {"path": path})
@@ -221,7 +229,7 @@ class RemoteClient:
         self.request_json("POST", "/api/move", {"path": path, "destDir": dest_dir})
 
     def upload_status(self, path: str, size: int) -> dict[str, Any]:
-        return self.request_json("POST", "/api/upload/status", {"path": path, "size": size})
+        return self.request_json("POST", "/api/upload/status", {"path": path, "size": size}, retryable=True)
 
     def upload_chunk(
         self,
@@ -261,6 +269,7 @@ class RemoteClient:
                 "sha256": digest,
                 "overwrite": overwrite,
             },
+            retryable=True,
         )
 
     def download_chunk(self, path: str, offset: int, length: int) -> bytes:
@@ -1077,6 +1086,29 @@ def remote_http_error(exc: HTTPError) -> AgentRemoteError:
         str(payload.get("message", exc.reason)),
         details=payload,
     )
+
+
+def rate_limit_retry_delay(exc: HTTPError, attempt: int) -> float:
+    retry_after = ""
+    try:
+        retry_after = exc.headers.get("Retry-After", "")
+    except AttributeError:
+        retry_after = ""
+    try:
+        if retry_after:
+            return min(60.0, max(0.5, float(retry_after)))
+    except ValueError:
+        pass
+    return min(15.0, 1.0 * (2**attempt))
+
+
+def is_transfer_request_url(url: str) -> bool:
+    return urlparse(url).path in {
+        "/api/upload/status",
+        "/api/upload/chunk",
+        "/api/upload/finish",
+        "/api/download",
+    }
 
 
 def run_master(

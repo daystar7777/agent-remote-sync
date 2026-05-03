@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import io
 import hashlib
 import json
@@ -19,7 +20,13 @@ from urllib.request import Request, urlopen
 import agentremote.master as master_module
 from agentremote.bootstrap import format_summary, run_bootstrap
 from agentremote.cleanup import cleanup_stale_partials
-from agentremote.cli import main as cli_main
+from agentremote.cli import (
+    DEFAULT_SYNC_EXCLUDES,
+    VOLATILE_MEMORY_EXCLUDES,
+    main as cli_main,
+    sync_project_excludes,
+    sync_project_exclusion_summary,
+)
 from agentremote.common import MAX_JSON_BODY, MAX_UPLOAD_CHUNK, AgentRemoteError, console_print, partial_paths
 from agentremote.console import should_relaunch_in_console
 from agentremote.connections import get_connection, load_connections, normalize_alias, save_connections
@@ -31,7 +38,7 @@ from agentremote.master import AgentRemoteMasterServer, MasterState, RemoteClien
 from agentremote.security import SecurityConfig, SecurityState
 from agentremote.slave import AgentRemoteSlaveServer, SlaveState
 from agentremote.state import TransferLogger, logs_dir, prune_transfer_logs
-from agentremote.sync import sync_plan_push, sync_pull, sync_push, write_plan
+from agentremote.sync import exclude_match, sync_plan_push, sync_pull, sync_push, write_plan
 from agentremote.tls import ensure_self_signed_cert, wrap_server_socket
 from agentremote.worker import run_worker_loop
 from agentremote.worker_policy import allow_rule
@@ -529,7 +536,7 @@ class UsageScenarioTests(unittest.TestCase):
                 SecurityConfig(authenticated_per_minute=1, authenticated_transfer_per_minute=3),
             )
             try:
-                client = RemoteClient("127.0.0.1", slave.server_address[1], "secret")
+                client = RemoteClient("127.0.0.1", slave.server_address[1], "secret", max_retries=0)
                 client.stat("/")
                 with self.assertRaises(AgentRemoteError) as control_limit:
                     client.stat("/")
@@ -547,12 +554,47 @@ class UsageScenarioTests(unittest.TestCase):
 
     def test_s15c_default_transfer_rate_supports_many_small_files(self) -> None:
         state = SecurityState(SecurityConfig())
-        for _ in range(5000 * 3):
+        tiny_project_request_count = 36000 * 3
+        for _ in range(tiny_project_request_count):
             state.check_rate("127.0.0.1", authenticated=True, transfer=True)
         self.assertGreaterEqual(
             state.config.authenticated_transfer_per_minute,
-            5000 * 3,
+            tiny_project_request_count,
         )
+
+    def test_s15d_retryable_transfer_request_waits_on_rate_limit(self) -> None:
+        client = RemoteClient("127.0.0.1", 1, token="tok")
+        calls: list[str] = []
+
+        class FakeResponse:
+            def __enter__(self) -> "FakeResponse":
+                return self
+
+            def __exit__(self, _exc_type: object, _exc: object, _tb: object) -> None:
+                return None
+
+            def read(self) -> bytes:
+                return b'{"ok": true}'
+
+        def fake_open_url(*_args: object, **_kwargs: object) -> FakeResponse:
+            if not calls:
+                calls.append("rate-limited")
+                body = io.BytesIO(b'{"error":"rate_limited","message":"Too many requests"}')
+                raise HTTPError("http://127.0.0.1/api/upload/status", 429, "Too Many Requests", None, body)
+            calls.append("ok")
+            return FakeResponse()
+
+        with patch.object(master_module, "open_url", side_effect=fake_open_url):
+            with patch.object(master_module.time, "sleep") as sleep:
+                response = client.request_json(
+                    "POST",
+                    "/api/upload/status",
+                    {"path": "/bulk.txt", "size": 1},
+                    retryable=True,
+                )
+        self.assertEqual(response, {"ok": True})
+        self.assertEqual(calls, ["rate-limited", "ok"])
+        sleep.assert_called_once()
 
     def test_s16_firewall_skip_and_bad_port_are_safe(self) -> None:
         maybe_open_firewall(7171, "no")
@@ -1084,6 +1126,110 @@ class UsageScenarioTests(unittest.TestCase):
             finally:
                 slave.shutdown()
                 slave.server_close()
+
+    def test_s29b_sync_push_preserves_zero_byte_files(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            local = root / "local"
+            remote = root / "remote"
+            project = local / "project"
+            package = project / "pkg"
+            package.mkdir(parents=True)
+            remote.mkdir()
+            install_work_mem(local)
+            (project / ".gitkeep").write_bytes(b"")
+            (package / "__init__.py").write_bytes(b"")
+            (package / "real.py").write_text("VALUE = 1\n", encoding="utf-8")
+            slave = self.start_slave(remote)
+            try:
+                with redirect_stdout(io.StringIO()):
+                    result = sync_push(
+                        "127.0.0.1",
+                        slave.server_address[1],
+                        "secret",
+                        project,
+                        "/project",
+                        local_root=local,
+                    )
+                self.assertEqual(result["session"]["status"], "completed")
+                self.assertTrue((remote / "project" / ".gitkeep").is_file())
+                self.assertTrue((remote / "project" / "pkg" / "__init__.py").is_file())
+                self.assertEqual((remote / "project" / ".gitkeep").stat().st_size, 0)
+                self.assertEqual((remote / "project" / "pkg" / "__init__.py").stat().st_size, 0)
+            finally:
+                slave.shutdown()
+                slave.server_close()
+
+    def test_s29c_sync_project_defaults_exclude_generated_and_secret_paths(self) -> None:
+        expected = {
+            "Library/",
+            "Temp/",
+            "Obj/",
+            "Logs/",
+            "UserSettings/",
+            ".claude/",
+            ".codex/",
+            ".opencode/",
+            ".env",
+            ".env.*",
+            "*.pem",
+            "*.key",
+            "*.p12",
+            "*.pfx",
+            "*.crt",
+            "AIMemory/agentremote_hosts/",
+        }
+        self.assertTrue(expected.issubset(DEFAULT_SYNC_EXCLUDES))
+        self.assertFalse(exclude_match("AIMemory/work.log", is_dir=False, patterns=DEFAULT_SYNC_EXCLUDES))
+        self.assertEqual(
+            exclude_match("UnityGame/Library/cache.bin", is_dir=False, patterns=DEFAULT_SYNC_EXCLUDES),
+            "Library/",
+        )
+        self.assertEqual(
+            exclude_match("pkg/.env.local", is_dir=False, patterns=DEFAULT_SYNC_EXCLUDES),
+            ".env.*",
+        )
+        self.assertEqual(
+            exclude_match("tools/.claude/settings.json", is_dir=False, patterns=DEFAULT_SYNC_EXCLUDES),
+            ".claude/",
+        )
+
+    def test_s29d_sync_project_profiles_and_volatile_memory_excludes_are_explicit(self) -> None:
+        args = argparse.Namespace(
+            include_memory=True,
+            include_volatile_memory=False,
+            all_files=False,
+            profile=["unity-python-llm"],
+            exclude=[],
+        )
+        excludes = sync_project_excludes(args)
+        self.assertTrue(VOLATILE_MEMORY_EXCLUDES.issubset(excludes))
+        self.assertIn("models/", excludes)
+        self.assertIn("tts/", excludes)
+        self.assertIn("node_modules/", excludes)
+        self.assertIn("__pycache__/", excludes)
+        self.assertNotIn("AIMemory/", excludes)
+
+        args.include_volatile_memory = True
+        includes_volatile = sync_project_excludes(args)
+        self.assertFalse(VOLATILE_MEMORY_EXCLUDES.intersection(includes_volatile))
+
+        args.all_files = True
+        args.exclude = ["keep-me-out/"]
+        all_files_excludes = sync_project_excludes(args)
+        self.assertEqual(all_files_excludes, {"keep-me-out/"})
+
+    def test_s29e_sync_project_exclusion_summary_groups_by_reason_pattern(self) -> None:
+        plan = {
+            "excluded": [
+                {"rel": "Unity/Library/", "type": "dir", "pattern": "Library/"},
+                {"rel": "Unity/Library/cache.bin", "type": "file", "pattern": "Library/"},
+                {"rel": "AIMemory/agentremote_hosts/remote90.md", "type": "file", "pattern": "AIMemory/agentremote_hosts/"},
+            ]
+        }
+        summary = sync_project_exclusion_summary(plan)
+        self.assertIn("Library/: 2 path(s) e.g. Unity/Library/", summary[0])
+        self.assertTrue(any("AIMemory/agentremote_hosts/" in line for line in summary))
 
     def test_s30_sync_push_conflict_requires_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
