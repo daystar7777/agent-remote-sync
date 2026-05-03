@@ -457,13 +457,15 @@ agentremote report master <handoff-id> "Tests passed. Suggested next step: relea
 ```
 
 `--wait-report` waits only for a report that comes back to the current project.
-It does not start a remote worker by itself. Use it when the receiver already
-has a worker/agent that will claim the inbox and send a report, preferably with
-a receiver-side `--callback-alias` back to this host. If waiting times out, use
+It does not magically wake a remote LLM by itself. In current builds,
+slave/daemon starts an embedded auto-worker by default and processes pending
+`autoRun` inbox items on startup. Use `--no-auto-worker` if you want pure manual
+inbox mode. For natural-language work, configure a receiver-side
+`--worker-agent-command`; otherwise the worker can only run explicit
+`agentremote-run:` commands or report a blocker. If waiting times out, use
 `agentremote calls show <call-id> --root <project>` and
-`agentremote calls wait <call-id> --root <project>` to
-inspect or resume the wait, then ask the receiver-side agent to run
-`agentremote inbox` or `agentremote worker --once --execute ask`.
+`agentremote calls wait <call-id> --root <project>` to inspect or resume the
+wait.
 
 ### 4. Agent Swarm Foundation
 
@@ -547,10 +549,14 @@ Send only an instruction:
 ```powershell
 agentremote ask lab "Review /incoming/project and report back." --path /incoming/project --wait-report
 agentremote tell lab "Review /incoming/project and report back." --path /incoming/project
+agentremote tell lab "Leave this for manual review." --no-auto-run
 ```
 
 `ask` is the friendly instruction-only command. It requests a report by default
 and can wait for a matching `STATUS_REPORT` with `--wait-report --timeout 600`.
+`ask`, `tell`, `handoff`, and `call` mark instructions as `autoRun` by default;
+use `--no-auto-run` when you want the receiver to leave the item in the inbox
+for manual review.
 For file-plus-instruction handoffs, both forms are supported:
 
 ```powershell
@@ -572,18 +578,22 @@ Run a receiving worker:
 agentremote worker --once
 agentremote worker --execute ask
 agentremote worker --execute yes --agent-command "python ./agent_bridge.py"
-agentremote daemon serve --root . --auto-worker --worker-execute yes --worker-agent-command "python ./agent_bridge.py"
+agentremote daemon serve --root . --worker-agent-command "python ./agent_bridge.py"
+agentremote daemon serve --root . --no-auto-worker
 ```
 
 Worker mode only executes commands that are explicitly written as
 `agentremote-run: <command>` lines, and only when `--execute ask` or
-`--execute yes` is supplied. Without `--once`, the worker polls continuously for
-eligible `autoRun` handoffs.
+`--execute yes` is supplied. Slave/daemon mode now starts an embedded worker by
+default with `--worker-execute yes`, so pending `autoRun` messages are processed
+first when the receiver starts. Use `--no-auto-worker` to make the receiver only
+store incoming handoffs for later manual review. Without `--once`, standalone
+`agentremote worker` polls continuously for eligible `autoRun` handoffs.
 
 For natural-language handoffs with no `agentremote-run:` lines, configure a
 local agent bridge with `--agent-command` or, for a long-running slave/daemon,
-`--auto-worker --worker-agent-command`. The bridge command runs on the receiver
-host with these environment variables:
+`--worker-agent-command`. The bridge command runs on the receiver host with
+these environment variables:
 
 - `AGENTREMOTE_BRIDGE_INPUT`: JSON request file containing the task, handoff id,
   expected report, and related paths.

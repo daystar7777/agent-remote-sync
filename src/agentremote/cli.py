@@ -246,7 +246,7 @@ def main(argv: list[str] | None = None) -> None:
     tell_parser.add_argument("--from-name", default="", help="sender name for the manifest")
     tell_parser.add_argument("--path", action="append", default=[], help="remote path related to the task")
     tell_parser.add_argument("--expect-report", default="", help="report requested from the receiver")
-    tell_parser.add_argument("--auto-run", action="store_true", help="mark instruction as eligible for receiver auto mode")
+    add_autorun_args(tell_parser)
     tell_parser.add_argument("--callback-alias", default="", help="receiver-side saved alias for sending a report back")
     add_policy_arg(tell_parser)
     add_tls_client_args(tell_parser)
@@ -263,7 +263,7 @@ def main(argv: list[str] | None = None) -> None:
     handoff_parser.add_argument("--overwrite", action="store_true", help="overwrite remote conflicts")
     handoff_parser.add_argument("--from-name", default="", help="sender name for the manifest")
     handoff_parser.add_argument("--expect-report", default=DEFAULT_EXPECT_REPORT, help="report requested from the receiver")
-    handoff_parser.add_argument("--auto-run", action="store_true", help="mark instruction as eligible for receiver auto mode")
+    add_autorun_args(handoff_parser)
     handoff_parser.add_argument("--callback-alias", default="", help="receiver-side saved alias for sending a report back")
     handoff_parser.add_argument("--wait-report", action="store_true", help="wait for a matching status report")
     handoff_parser.add_argument("--timeout", type=int, default=300, help="wait timeout in seconds")
@@ -473,7 +473,7 @@ def main(argv: list[str] | None = None) -> None:
     call_parser.add_argument("--overwrite", action="store_true", help="overwrite remote conflicts")
     call_parser.add_argument("--from-name", default="", help="sender name for the manifest")
     call_parser.add_argument("--expect-report", default="", help="report requested from the receiver")
-    call_parser.add_argument("--auto-run", action="store_true", help="mark instruction as eligible for auto mode")
+    add_autorun_args(call_parser)
     call_parser.add_argument("--callback-alias", default="", help="receiver-side alias for sending a report back")
     add_policy_arg(call_parser)
     add_tls_client_args(call_parser)
@@ -590,7 +590,7 @@ def main(argv: list[str] | None = None) -> None:
     ask_parser.add_argument("name", help="saved connection alias")
     ask_parser.add_argument("task", help="instruction text")
     ask_parser.add_argument("--expect-report", default=DEFAULT_EXPECT_REPORT, help="expected report text")
-    ask_parser.add_argument("--auto-run", action="store_true", help="mark for receiver auto mode")
+    add_autorun_args(ask_parser)
     ask_parser.add_argument("--from-name", default="", help="sender name")
     ask_parser.add_argument("--path", action="append", default=[], help="remote path related to task")
     ask_parser.add_argument("--callback-alias", default="", help="receiver-side alias for report back")
@@ -1934,13 +1934,41 @@ def add_policy_arg(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def add_autorun_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--auto-run",
+        dest="auto_run",
+        action="store_true",
+        default=True,
+        help="mark instruction as eligible for receiver auto mode (default)",
+    )
+    parser.add_argument(
+        "--no-auto-run",
+        dest="auto_run",
+        action="store_false",
+        help="send to the receiver inbox without automatic worker processing",
+    )
+
+
 def add_embedded_worker_args(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--auto-worker", action="store_true", help="run a worker loop inside this slave/daemon process")
+    parser.add_argument(
+        "--auto-worker",
+        dest="auto_worker",
+        action="store_true",
+        default=True,
+        help="run a worker loop inside this slave/daemon process (default)",
+    )
+    parser.add_argument(
+        "--no-auto-worker",
+        dest="auto_worker",
+        action="store_false",
+        help="disable the embedded worker and only receive handoffs into the inbox",
+    )
     parser.add_argument(
         "--worker-execute",
         choices=["never", "ask", "yes"],
-        default="never",
-        help="embedded worker execution mode; use yes only on trusted hosts",
+        default="yes",
+        help="embedded worker execution mode; defaults to yes for auto processing on trusted project roots",
     )
     parser.add_argument("--worker-include-manual", action="store_true", help="embedded worker may process non-autoRun instructions")
     parser.add_argument("--worker-report-to", default="", help="override callback alias for embedded worker STATUS_REPORTs")
@@ -2826,7 +2854,7 @@ def wait_report_next_steps(result: dict) -> list[str]:
     steps = [
         "On the receiver/slave host, ask the local agent to inspect the inbox and process the instruction.",
         "The receiver can run `agentremote worker --once --execute ask` from the project root that started slave/daemon.",
-        "For unattended future work, restart the receiver with `--auto-worker --worker-execute yes`.",
+        "For unattended future work, restart the receiver normally; embedded auto-worker is on by default.",
         "For natural-language tasks, the receiver also needs a trusted `--worker-agent-command` bridge.",
     ]
     if instruction_id:
@@ -2880,10 +2908,11 @@ shell access.
   or `agentremote calls wait <call-id> --root <project>`, then ask the
   receiver-side agent to run `agentremote inbox`, `agentremote inbox --read <id>`,
   and `agentremote worker --once --execute ask` from the slave project root.
-- For unattended receiver-side processing, the receiver must start slave/daemon
-  with `--auto-worker --worker-execute yes`. This only runs explicit
-  `agentremote-run:` lines unless a trusted local bridge is configured with
-  `--worker-agent-command`.
+- For unattended receiver-side processing, slave/daemon starts an embedded
+  worker by default and processes pending `autoRun` inbox messages on startup.
+  Use `--no-auto-worker` only for manual inbox review. The worker only runs
+  explicit `agentremote-run:` lines unless a trusted local bridge is configured
+  with `--worker-agent-command`.
 - For natural-language handoffs, the bridge command receives
   `AGENTREMOTE_BRIDGE_INPUT` and writes a markdown report to
   `AGENTREMOTE_BRIDGE_OUTPUT` or stdout. `--auto-run` alone does not wake a
@@ -2906,7 +2935,7 @@ AGENTREMOTE_ONBOARDING_KO_NOTES = """## 한국어 요약
 - 사용자가 정말 원할 때만 `--all-files` 또는 `--no-default-excludes`를 사용합니다.
 - `--wait-report`는 원격 실행이 아닙니다. 원격 host에서 worker/agent가 inbox를 처리하고 report를 다시 보내야 완료됩니다.
 - 멈춘 것처럼 보이면 `agentremote calls show <call-id> --root <project>`와 `agentremote calls wait <call-id> --root <project>`를 사용하고, 원격 에이전트에게 `agentremote worker --once --execute ask`를 실행하게 하세요.
-- 무인 처리를 원하면 받는 쪽 slave/daemon을 `--auto-worker --worker-execute yes`로 시작해야 합니다.
+- 받는 쪽 slave/daemon은 embedded auto-worker를 기본으로 켜고 시작 시 처리되지 않은 `autoRun` 메시지를 먼저 처리합니다. 수동 inbox 모드가 필요할 때만 `--no-auto-worker`를 사용합니다.
 - 자연어 핸드오프는 `--worker-agent-command`로 신뢰된 로컬 에이전트 브리지를 연결해야 자동 처리됩니다. `--auto-run`만으로 원격 LLM이 깨어나지는 않습니다.
 """
 

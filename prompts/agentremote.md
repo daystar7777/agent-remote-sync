@@ -147,24 +147,28 @@ agentremote inbox --read <instruction-id>
 agentremote worker --once --execute ask
 ```
 
-For unattended receiver-side processing, the receiver must explicitly opt in to
-an embedded worker:
+For unattended receiver-side processing, slave/daemon starts an embedded worker
+by default. On startup it processes pending `autoRun` inbox messages before
+idling. Use `--no-auto-worker` only when the user wants manual inbox review:
 
 ```powershell
-agentremote daemon serve --root <project> --auto-worker --worker-execute yes
+agentremote daemon serve --root <project>
+agentremote daemon serve --root <project> --no-auto-worker
 ```
 
 This only runs explicit `agentremote-run:` lines. For natural-language handoffs
 with no explicit command, the receiver must also configure a local agent bridge:
 
 ```powershell
-agentremote daemon serve --root <project> --auto-worker --worker-execute yes --worker-agent-command "<trusted local agent bridge command>"
+agentremote daemon serve --root <project> --worker-agent-command "<trusted local agent bridge command>"
 ```
 
 The bridge command receives `AGENTREMOTE_BRIDGE_INPUT` and must write a markdown
 report to `AGENTREMOTE_BRIDGE_OUTPUT` or print a report to stdout. Do not imply
 that `--auto-run` alone wakes a remote LLM; it only marks the instruction as
-eligible for a receiver-side worker.
+eligible for a receiver-side worker. `ask`, `tell`, `handoff`, and `call` now
+send auto-run instructions by default; use `--no-auto-run` for manual inbox-only
+delivery.
 
 Avoid remote destinations under `.agentremote_*`; those are protocol-reserved.
 For human-readable handoff attachments, use a project path such as

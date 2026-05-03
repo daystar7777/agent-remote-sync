@@ -1877,7 +1877,6 @@ class UsageScenarioTests(unittest.TestCase):
             thread = start_embedded_worker(
                 state,
                 enabled=True,
-                execute="yes",
                 interval=0.01,
                 max_iterations=2,
                 agent_command=f'"{sys.executable}" "{bridge}"',
@@ -2302,7 +2301,6 @@ class UsageScenarioTests(unittest.TestCase):
                             "/cli/cli.txt",
                             "--from-name",
                             "cli-master",
-                            "--auto-run",
                         ]
                     )
                 instructions = list_instructions(remote)
@@ -2310,6 +2308,12 @@ class UsageScenarioTests(unittest.TestCase):
                 self.assertEqual(instructions[0]["from"], "cli-master")
                 self.assertTrue(instructions[0]["autoRun"])
                 self.assertEqual(instructions[0]["paths"], ["/cli/cli.txt"])
+
+                with redirect_stdout(io.StringIO()):
+                    cli_main(["tell", "lab", "Manual review only.", "--no-auto-run"])
+                instructions = list_instructions(remote)
+                manual = next(item for item in instructions if item["task"] == "Manual review only.")
+                self.assertFalse(manual["autoRun"])
 
                 with redirect_stdout(io.StringIO()):
                     cli_main(["pull", "lab", "/cli/cli.txt", "received", "--overwrite"])

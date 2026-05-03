@@ -693,8 +693,8 @@ def run_slave(
     verbose: bool = False,
     policy: str = "off",
     node_name: str = "",
-    auto_worker: bool = False,
-    worker_execute: str = "never",
+    auto_worker: bool = True,
+    worker_execute: str = "yes",
     worker_include_manual: bool = False,
     worker_report_to: str = "",
     worker_from_name: str = "agentremote-auto-worker",
@@ -812,7 +812,7 @@ def start_embedded_worker(
     state: SlaveState,
     *,
     enabled: bool,
-    execute: str = "never",
+    execute: str = "yes",
     include_manual: bool = False,
     report_to: str = "",
     from_name: str = "agentremote-auto-worker",
@@ -828,12 +828,19 @@ def start_embedded_worker(
     def runner() -> None:
         try:
             from .worker import run_worker_loop
+            from .inbox import list_instructions
 
+            pending = [
+                item for item in list_instructions(state.root)
+                if item.get("state") == "received" and (item.get("autoRun") or include_manual)
+            ]
             state.log(
                 "auto-worker started "
-                f"execute={execute} bridge={'on' if agent_command else 'off'} interval={interval}s",
+                f"execute={execute} bridge={'on' if agent_command else 'off'} pending={len(pending)} interval={interval}s",
                 important=True,
             )
+            for item in pending[:5]:
+                state.log(f"auto-worker pending {item.get('id')}: {str(item.get('task', ''))[:100]}", important=True)
             result = run_worker_loop(
                 state.root,
                 execute=execute,
